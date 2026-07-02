@@ -715,3 +715,38 @@ export const testRdtDeltaAttributionSanity = () => {
   t.assert(root.delta.equals(delta.create().insert('hello', null, { insert: [uid] }).done()))
   t.assert(root.delta.equals(root.toDelta({ deep: true })))
 }
+
+/**
+ * Currently-failing repro: formatting across a suggestion-deleted range with an
+ * accepting renderer (suggestionMode=false) drifts the maintained `.delta`
+ * cache — the change render attributes the formatted runs
+ * (`{format:{code:[]}}`) while a fresh deep render nets no format attribution
+ * (the format committed to base; it is not a suggestion). Also reproduces with
+ * two independent renderers on separate suggestion docs (fixed suggestionMode
+ * flags), i.e. without flipping the flag: a suggestion-mode peer deletes, a
+ * view-suggestions peer formats across the deleted range.
+ */
+export const testRdtFormatAcrossSuggestionDeletedDrift = () => {
+  const doc = new Y.Doc({ gc: false })
+  const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  doc.get('prosemirror').applyDelta(
+    delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
+  )
+  const ytype = suggestionDoc.get('prosemirror')
+  ytype.useRenderer(renderer)
+  void ytype.delta // materialize the maintained cache
+  // suggestion-delete "llo " (stays a suggestion; still rendered, attributed)
+  renderer.suggestionMode = true
+  ytype.applyDelta(delta.create().modify(delta.create().retain(2).delete(4)).done())
+  // as an accepting user, format across the still-rendered deleted range
+  renderer.suggestionMode = false
+  ytype.applyDelta(delta.create().modify(delta.create().retain(1).retain(6, { code: {} })).done())
+  const cached = ytype.delta
+  const fresh = ytype.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+}

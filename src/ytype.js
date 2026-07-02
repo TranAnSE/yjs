@@ -711,6 +711,14 @@ export class YType extends ObservableV2 {
      * @type {AbstractRenderer}
      */
     this._renderer = baseRenderer
+    /**
+     * Bound listener on the active renderer's `'change'` event — attribution corrections that
+     * happen without a Y transaction on this doc (e.g. a suggestion is accepted and the
+     * renderer's attribution overlay updates). `null` while the base renderer is active.
+     * Managed by {@link YType#useRenderer}; see {@link typeApplyRendererChange}.
+     * @type {((changes: IdSet, origin: any, local: boolean) => void) | null}
+     */
+    this._rendererChangeHandler = null
   }
 
   /**
@@ -786,8 +794,23 @@ export class YType extends ObservableV2 {
    */
   useRenderer (renderer) {
     const prev = this._renderer
+    if (renderer === prev) return this
+    if (this._rendererChangeHandler !== null) {
+      prev.off('change', this._rendererChangeHandler)
+      this._rendererChangeHandler = null
+    }
+    if (renderer !== baseRenderer && this._rendererChangeHandler === null) {
+      // attribution corrections (e.g. accepting a suggestion) reach the renderer without a Y
+      // transaction on this doc — subscribe so the RDT surface (maintained cache + 'delta'
+      // channel) stays current. The base renderer has no attributions, hence no subscription.
+      // Not gated on `renderer !== prev`: after `destroy()` the handler is removed while
+      // `_renderer` keeps pointing at the renderer, so re-activating with the same renderer must
+      // re-subscribe.
+      this._rendererChangeHandler = (changes, origin) => typeApplyRendererChange(this, changes, origin)
+      renderer.on('change', this._rendererChangeHandler)
+    }
     const hasDeltaListeners = (this._observers.get('delta')?.size ?? 0) > 0
-    if (renderer !== prev && (this._delta !== null || hasDeltaListeners)) {
+    if (this._delta !== null || hasDeltaListeners) {
       const oldState = this._delta ?? this._renderDelta()
       this._renderer = renderer
       const newState = this._renderDelta()
@@ -803,11 +826,22 @@ export class YType extends ObservableV2 {
   }
 
   /**
-   * Tear down this type as an `RDT`: emit the `'destroy'` event and unregister all `'delta'` /
-   * `'destroy'` listeners. The CRDT content and the `observe`/`observeDeep` handlers are left
-   * untouched — this only releases the RDT/binding observers.
+   * Tear down this type as an `RDT`: emit the `'destroy'` event, unregister all `'delta'` /
+   * `'destroy'` listeners, and reset the RDT surface (active renderer back to `baseRenderer`, the
+   * maintained {@link YType#delta} cache dropped). The CRDT content and the
+   * `observe`/`observeDeep` handlers are left untouched — this only releases the RDT/binding
+   * observers. Without the reset, a still-materialized cache would keep being maintained through
+   * the transaction path but no longer receive the renderer's attribution corrections — reading
+   * `delta` after `destroy()` would silently drift. Re-activating is fully supported:
+   * `useRenderer(renderer)` re-subscribes and `delta` re-materializes.
    */
   destroy () {
+    if (this._rendererChangeHandler !== null) {
+      this._renderer.off('change', this._rendererChangeHandler)
+      this._rendererChangeHandler = null
+    }
+    this._renderer = baseRenderer
+    this._delta = null
     this.emit('destroy', [this])
     super.destroy()
   }
@@ -994,6 +1028,28 @@ export class YType extends ObservableV2 {
        */
       const previousFormats = {} // The value before changes
       /**
+       * Attribution argument for a change-render retain whose content lost its *own* attribution.
+       * `null` clears everything — correct in an attribution-free context — but inside an ambient
+       * format attribution (installed via `useAttribution` by a surrounding format marker) the
+       * fresh render still stamps that ambient format on this content. An object argument merges
+       * over the ambient context (lib0 `combineInstr`), so emit per-key removals instead: they
+       * clear only the op's own insert/delete attribution while re-asserting the ambient format.
+       */
+      const clearedOwnAttribution = () => d.usedAttribution == null ? null : /** @type {any} */ ({ insert: null, insertAt: null, delete: null, deleteAt: null })
+      /**
+       * Format keys touched by a *rendered* format marker during an attributing change render. A
+       * merely retained attributed marker normally must not emit ops — but when a rendered
+       * same-key marker preceded it in this walk, the change is what made the retained boundary
+       * reset-to-previous (e.g. a base-doc format arriving under a same-key format suggestion),
+       * and the spans it governs must drop their now-stale attribution from the cache. Per-key
+       * tracking is required (a plain "any format rendered" flag would over-clear other keys),
+       * but the set is only ever consulted at format markers — never per character — and stays
+       * `null` on all hot paths: full renders, base-renderer renders, and change renders without
+       * format markers never allocate it.
+       * @type {Set<string>?}
+       */
+      let renderedFormatKeys = null
+      /**
        * @type {Array<AttributedContent<any>>}
        */
       const cs = []
@@ -1041,8 +1097,8 @@ export class YType extends ObservableV2 {
                   d.usedFormats = changedFormats
                   usingChangedFormats = true
                   // change render: a retained item with no attribution means its attribution was
-                  // removed → emit `null` (clear) rather than `{}` (skip). Present attribution merges.
-                  d.retain(/** @type {ContentString} */ (c.content).str.length, undefined, attribution ?? null)
+                  // removed → emit a clear rather than `{}` (skip). Present attribution merges.
+                  d.retain(/** @type {ContentString} */ (c.content).str.length, undefined, attribution ?? clearedOwnAttribution())
                 } else {
                   d.usedFormats = currentFormats
                   usingCurrentFormats = true
@@ -1070,7 +1126,7 @@ export class YType extends ObservableV2 {
                     // @todo use current transaction instead
                     d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll), undefined, attribution ?? null)
                   } else {
-                    d.retain(c.content.getLength(), undefined, attribution ?? null)
+                    d.retain(c.content.getLength(), undefined, attribution ?? clearedOwnAttribution())
                   }
                 } else if (deep && c.content.constructor === ContentType) {
                   d.usedFormats = currentFormats
@@ -1114,6 +1170,11 @@ export class YType extends ObservableV2 {
                 }
               }
               if (renderContent || renderDelete) {
+                if (itemsToRender !== null && renderer !== baseRenderer) {
+                  // only attributing change renders consult this (see the reset branch below)
+                  if (renderedFormatKeys === null) renderedFormatKeys = new Set()
+                  renderedFormatKeys.add(key)
+                }
                 if (c.deleted) {
                   // content was deleted, but is possibly attributed
                   if (!equalFormats(value, currFormatVal)) { // do nothing if nothing changed
@@ -1170,16 +1231,42 @@ export class YType extends ObservableV2 {
               // still-present surrounding value (e.g. deleting a `bold:null` marker re-exposes an
               // enclosing attributed `bold:true`, as when re-bolding), the attribution is preserved.
               const isDeletedFormatClear = attribution == null && renderer !== baseRenderer && renderDelete && c.deleted && itemsToRender != null && currFormatVal == null && !equalFormats(value, currFormatVal)
-              if (attribution != null || isDeletedFormatClear || object.hasProperty(previousUnattributedFormats, key)) {
+              // The alive-marker analogue of `isDeletedFormatClear`: a format marker whose
+              // *attribution* was removed while the marker survives — its suggestion was accepted
+              // (the marker's id arrives via the renderer's `'change'` event). The original change
+              // render stamped `{ format: { [key]: [] } }` on the spans this marker governs, so the
+              // heal render must emit a per-key `null` leaf over those spans (a blunt
+              // `attribution: null` would also wipe unrelated attributions such as a co-located
+              // `{ delete: [] }`). Gated on `retainInserts` — the diff-against-existing-content
+              // mode used by attribution-heal renders: in a plain event render an unattributed
+              // alive marker is just new unattributed content and must not emit spurious clears.
+              // When the key is tracked as an open attributed range (`previousUnattributedFormats`)
+              // the accepted marker instead defers to the regular branch chain below, which mirrors
+              // the fresh render exactly: mid-range it *keeps* the ambient attribution (relative to
+              // the base doc the span's format is still a suggested change), and at the range end
+              // (`sameAsPreviousAttributions`) it closes the attribution context.
+              const isAcceptedFormatClear = attribution == null && renderer !== baseRenderer && renderContent && !c.deleted && itemsToRender != null && retainInserts && !object.hasProperty(previousUnattributedFormats, key)
+              if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || object.hasProperty(previousUnattributedFormats, key)) {
                 /**
                  * @type {Attribution}
                  */
                 const formattingAttribution = object.assign({}, d.usedAttribution)
                 const changedAttributedFormats = /** @type {{ [key: string]: Array<any>|null }} */ (formattingAttribution.format = object.assign({}, formattingAttribution.format ?? {}))
                 const sameAsPreviousAttributions = equalFormats(previousUnattributedFormats[key], currentFormats[key] ?? null)
-                if (isDeletedFormatClear) {
+                if (isDeletedFormatClear || (isAcceptedFormatClear && changedAttributedFormats[key] == null)) {
+                  // uniformly emit the per-key clear — also for a marker that *ends* a formerly
+                  // attributed range: the attributed render emits a trailing per-key `null` past
+                  // the closing marker as well (see the `attribution != null` case below), so the
+                  // heal render mirrors that exact span; where the cache holds no stale
+                  // attribution the clear merges as a no-op.
                   changedAttributedFormats[key] = null
                   delete previousUnattributedFormats[key]
+                } else if (isAcceptedFormatClear) {
+                  // accepted marker inside a *still-attributed* (pending) range for the same key —
+                  // the ambient context holds an attributor list, not a clear. Relative to the base
+                  // doc the effective format of this span is still a suggested change, so the fresh
+                  // render keeps attributing it (the `skip` case below): keep the ambient
+                  // attribution rather than clearing it.
                 } else if (attribution == null && !sameAsPreviousAttributions) {
                   // skip
                 } else if (attribution == null || sameAsPreviousAttributions) {
@@ -1189,11 +1276,17 @@ export class YType extends ObservableV2 {
                   // render (`itemsToRender != null`), it is the END of an attributed format range:
                   // emit an explicit clear (a `null` leaf) so the retained content drops any stale
                   // `{ format: { [key]: [] } }` from the maintained `delta` cache — a bare context-skip
-                  // (`delete`) would leave it in place. For a merely-retained (unchanged) boundary, or a
-                  // full insert render (removal is already modeled as absence in `currentFormats`),
-                  // just drop the key: a change render must not emit ops for unchanged ranges, and
-                  // inserts must stay free of a spurious `{ format: { [key]: null } }`.
-                  if (attribution != null && itemsToRender != null && (renderContent || renderDelete)) {
+                  // (`delete`) would leave it in place. The same applies to a *retained* attributed
+                  // boundary when a rendered same-key marker preceded it in this walk
+                  // (`renderedFormatKeys`): the boundary only resets-to-previous *because of* the
+                  // rendered change (e.g. a base-doc format arriving under an equal same-key format
+                  // suggestion — which marker comes first depends on client ids), so the spans it
+                  // governs must drop their now-stale attribution too. For a merely-retained boundary
+                  // with no rendered same-key marker, or a full insert render (removal is already
+                  // modeled as absence in `currentFormats`), just drop the key: a change render must
+                  // not emit ops for unchanged ranges, and inserts must stay free of a spurious
+                  // `{ format: { [key]: null } }`.
+                  if (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true)) {
                     changedAttributedFormats[key] = null
                   } else {
                     delete changedAttributedFormats[key]
@@ -1207,7 +1300,7 @@ export class YType extends ObservableV2 {
                 }
                 if (object.isEmpty(changedAttributedFormats)) {
                   d.useAttribution(null)
-                } else if (attribution != null || isDeletedFormatClear) {
+                } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear) {
                   const attributedAt = (c.deleted ? attribution?.deleteAt : attribution?.insertAt)
                   if (attributedAt != null) formattingAttribution.formatAt = attributedAt
                   d.useAttribution(formattingAttribution)
@@ -1684,6 +1777,34 @@ export const computeModifiedFromItems = (store, items) => {
     }
   })
   return modified
+}
+
+/**
+ * The active renderer's attribution overlay changed (e.g. a suggestion was accepted or rejected)
+ * without a Y transaction on the type's doc, so no `YEvent` fires. Re-render the affected id
+ * ranges and keep the RDT surface current, mirroring the per-transaction upkeep in
+ * `cleanupTransactions`: patch the maintained {@link YType#delta} cache and emit the change on
+ * the `'delta'` channel. Wired to the renderer's `'change'` event by {@link YType#useRenderer}.
+ *
+ * Ranges in `changes` that the doc has not (yet) integrated — e.g. a base-doc edit whose update
+ * flows in only after the renderer event — simply render to nothing here; the later transaction
+ * covers them through the regular event path.
+ *
+ * @param {YType<any>} type
+ * @param {IdSet} changes
+ * @param {any} origin
+ *
+ * @private
+ * @function
+ */
+export const typeApplyRendererChange = (type, changes, origin) => {
+  const hasDeltaListeners = (type._observers.get('delta')?.size ?? 0) > 0
+  if ((type._delta === null && !hasDeltaListeners) || type.doc == null || (type._item !== null && type._item.deleted)) return
+  const change = type.toDelta({ renderer: type._renderer, deep: true, itemsToRender: changes, retainInserts: true, retainDeletes: true })
+  if (!change.isEmpty()) {
+    type._delta?.apply(change)
+    if (hasDeltaListeners) type.emit('delta', [change, origin])
+  }
 }
 
 /**
