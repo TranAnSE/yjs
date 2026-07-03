@@ -13,6 +13,7 @@ import { YEvent } from './YEvent.js'
 import { writeUpdateMessageFromTransaction } from './encoding-helpers.js'
 import { UpdateEncoderV1, UpdateEncoderV2 } from './UpdateEncoder.js'
 import { findIndexSS, updateCurrentFormats, cleanupFormattingGap, tryGcDeleteSet, tryMerge, tryToMergeWithLefts, cleanupContextlessFormattingGap } from './transaction-helpers.js'
+import { baseRenderer } from './renderer-helpers.js'
 import * as random from 'lib0/random'
 
 export const generateNewClientId = random.uint53
@@ -227,12 +228,13 @@ const cleanupTransactions = (transactionCleanups, i) => {
        * @type {Array<function():void>}
        */
       const fs = []
-      // observe events on changed types
+      // observe events on changed types. Deleted types are included: `callTypeObservers` tracks
+      // the event in `changedParentTypes` unconditionally (so changes inside a deleted type — e.g.
+      // a suggestion-deleted tombstone that a custom renderer still renders — bubble to live
+      // ancestors) and decides itself whether the type's own observers fire.
       transaction.changed.forEach((subs, itemtype) =>
         fs.push(() => {
-          if (itemtype._item === null || !itemtype._item.deleted) {
-            itemtype._callObserver(transaction, subs)
-          }
+          itemtype._callObserver(transaction, subs)
         })
       )
       fs.push(() => {
@@ -241,7 +243,9 @@ const cleanupTransactions = (transactionCleanups, i) => {
         transaction.changedParentTypes.forEach((events, type) => {
           // We need to think about the possibility that the user transforms the
           // Y.Doc in the event.
-          if (type._item !== null && type._item.deleted) return
+          // Deleted types are tracked (so changes inside them bubble to live ancestors) but fire
+          // only while something still renders them — i.e. they have a custom renderer attached.
+          if (type._item !== null && type._item.deleted && type._renderer === baseRenderer) return
           const hasDeep = type._dEH.l.length > 0
           const hasDeltaListeners = (type._observers.get('delta')?.size ?? 0) > 0
           const maintaining = type._delta !== null
@@ -256,8 +260,12 @@ const cleanupTransactions = (transactionCleanups, i) => {
           if (hasDeltaListeners || maintaining) {
             // the type-rooted deep delta of this transaction (a nested `modify` chain for ancestors)
             const change = /** @type {any} */ (deepEventHandler.getDelta({ renderer: type._renderer, deep: true }).done())
-            type._delta?.apply(change) // keep the cache current (incl. ancestors and diff-renderer attributions)
-            if (hasDeltaListeners) type.emit('delta', [change, transaction.origin])
+            // a base-renderer type doesn't render deleted content, so a change that happened
+            // entirely inside a deleted subtree renders to an empty delta — don't emit those no-ops
+            if (!change.isEmpty()) {
+              type._delta?.apply(change) // keep the cache current (incl. ancestors and diff-renderer attributions)
+              if (hasDeltaListeners) type.emit('delta', [change, transaction.origin])
+            }
           }
         })
       })

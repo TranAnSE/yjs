@@ -621,6 +621,9 @@ export const getTypeChildren = t => {
 export const callTypeObservers = (type, transaction, event) => {
   const changedType = type
   const changedParentTypes = transaction.changedParentTypes
+  // track the event unconditionally — also for deleted types: the walk carries changes inside a
+  // deleted type (e.g. a suggestion-deleted tombstone that a custom renderer still renders) up to
+  // the deep-event / 'delta' / cache consumers on live ancestors.
   while (true) {
     // @ts-ignore
     map.setIfUndefined(changedParentTypes, type, () => []).push(event)
@@ -629,7 +632,12 @@ export const callTypeObservers = (type, transaction, event) => {
     }
     type = /** @type {YType} */ (type._item.parent)
   }
-  callEventHandlerListeners(/** @type {any} */ (changedType._eH), event, transaction)
+  // a deleted type's own observers stay silent (deleted content is invisible) — unless a custom
+  // renderer is attached to it, which may still render the type (mirrors the fire-time rule for
+  // `changedParentTypes` targets in `cleanupTransactions`).
+  if (changedType._item === null || !changedType._item.deleted || changedType._renderer !== baseRenderer) {
+    callEventHandlerListeners(/** @type {any} */ (changedType._eH), event, transaction)
+  }
 }
 
 /**
@@ -1799,7 +1807,10 @@ export const computeModifiedFromItems = (store, items) => {
  */
 export const typeApplyRendererChange = (type, changes, origin) => {
   const hasDeltaListeners = (type._observers.get('delta')?.size ?? 0) > 0
-  if ((type._delta === null && !hasDeltaListeners) || type.doc == null || (type._item !== null && type._item.deleted)) return
+  // no deleted-type guard: this handler only exists while a custom renderer is attached (see
+  // `useRenderer`), and a custom renderer may still render a deleted type — its cache and 'delta'
+  // channel must stay current through accept/reject overlay changes.
+  if ((type._delta === null && !hasDeltaListeners) || type.doc == null) return
   const change = type.toDelta({ renderer: type._renderer, deep: true, itemsToRender: changes, retainInserts: true, retainDeletes: true })
   if (!change.isEmpty()) {
     type._delta?.apply(change)

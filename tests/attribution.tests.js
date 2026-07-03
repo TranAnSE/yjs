@@ -735,7 +735,7 @@ export const testRdtFormatAcrossSuggestionDeletedDrift = () => {
   )
   const ytype = suggestionDoc.get('prosemirror')
   ytype.useRenderer(renderer)
-  void ytype.delta // materialize the maintained cache
+  t.assert(ytype.delta != null) // materialize the maintained cache
   // suggestion-delete "llo " (stays a suggestion; still rendered, attributed)
   renderer.suggestionMode = true
   ytype.applyDelta(delta.create().modify(delta.create().retain(2).delete(4)).done())
@@ -749,4 +749,191 @@ export const testRdtFormatAcrossSuggestionDeletedDrift = () => {
     console.error('fresh :', JSON.stringify(fresh.toJSON()))
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+}
+
+/**
+ * Fixture for the delivery-through-deleted-parents tests: base doc + suggestion doc with pinned
+ * clientIDs (item/marker order at equal positions depends on clientID comparison — always pin, and
+ * exercise both orderings where it matters), a `paragraph('hello world')` created on the base doc
+ * (flows into the suggestion doc through the renderer), and optionally the diff renderer attached
+ * to the suggestion doc's root.
+ *
+ * @param {number} baseClientID
+ * @param {number} sdocClientID
+ * @param {boolean} useRootRenderer
+ */
+const createSuggestionPair = (baseClientID, sdocClientID, useRootRenderer = true) => {
+  const doc = new Y.Doc({ gc: false })
+  doc.clientID = baseClientID
+  const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sdoc.clientID = sdocClientID
+  const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+  doc.get('prosemirror').applyDelta(
+    delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
+  )
+  const ytype = sdoc.get('prosemirror')
+  if (useRootRenderer) ytype.useRenderer(renderer)
+  return { doc, sdoc, renderer, ytype }
+}
+
+/**
+ * A remote base-doc insert into a suggestion-deleted paragraph must reach the root's RDT surface:
+ * the tombstone is still rendered by the diff renderer, so the change is visible. The event now
+ * bubbles through the deleted parent (tracked unconditionally in `changedParentTypes`, fired on
+ * live ancestors).
+ *
+ * The final cache-equality assertion is EXPECTED TO FAIL for now: the freshly inserted content is
+ * auto-deleted with its parent in the same transaction (`insertSet ∩ deleteSet`), which
+ * `YEvent.getDelta` excludes from `itemsToRender` — the delivered change renders the tombstone
+ * modify without the new text. Fixing `event.getDelta` is the next step.
+ */
+export const testRdtDeltaThroughDeletedParent = () => {
+  for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
+    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ytype.delta != null) // materialize the maintained cache
+    let fired = 0
+    /**
+     * @type {any}
+     */
+    let captured = null
+    ytype.on('delta', d => { fired++; captured = d })
+    // suggestion-delete the whole paragraph (stays rendered as an attributed tombstone)
+    ytype.applyDelta(delta.create().delete(1).done())
+    t.assert(fired === 1)
+    fired = 0
+    // remote base edit inside the tombstone: integrates under the deleted paragraph in the
+    // suggestion doc (and is auto-deleted with it) — must still fire the root's 'delta'
+    doc.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(2).insert('XY')).done())
+    t.assert(fired === 1, 'root delta fires for a change inside a suggestion-deleted paragraph')
+    t.assert(captured !== null && !captured.isEmpty())
+    const fresh = ytype.toDelta({ deep: true })
+    t.assert(JSON.stringify(fresh.toJSON()).includes('XY'), 'fresh render shows the text inside the tombstone')
+    const cached = ytype.delta
+    if (!cached.equals(fresh)) {
+      console.error('cached:', JSON.stringify(cached.toJSON()))
+      console.error('fresh :', JSON.stringify(fresh.toJSON()))
+    }
+    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render (expected failure: event.getDelta misses insertSet ∩ deleteSet content)')
+  }
+}
+
+/**
+ * A remote base-doc format inside a suggestion-deleted paragraph: full contract — the root's
+ * 'delta' fires and the maintained cache equals a fresh deep render (format markers survive the
+ * render paths that the auto-deleted text content does not yet).
+ */
+export const testRdtDeltaFormatThroughDeletedParent = () => {
+  for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
+    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ytype.delta != null) // materialize the maintained cache
+    ytype.applyDelta(delta.create().delete(1).done()) // suggestion-delete the paragraph
+    let fired = 0
+    ytype.on('delta', () => { fired++ })
+    doc.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(1).retain(4, { bold: {} })).done())
+    t.assert(fired === 1, 'root delta fires for a format inside a suggestion-deleted paragraph')
+    const cached = ytype.delta
+    const fresh = ytype.toDelta({ deep: true })
+    if (!cached.equals(fresh)) {
+      console.error('cached:', JSON.stringify(cached.toJSON()))
+      console.error('fresh :', JSON.stringify(fresh.toJSON()))
+    }
+    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+  }
+}
+
+/**
+ * Plain docs (base renderer): deleted content is invisible, so a remote change inside a deleted
+ * paragraph emits no 'delta' (the change renders to an empty delta, which is suppressed) and v1
+ * `observe` semantics are unchanged. Deep listeners on live ancestors ARE notified now (the event
+ * is tracked through the deleted parent) — that is the chosen semantics.
+ */
+export const testRdtNoDeltaThroughDeletedParentPlainDoc = () => {
+  const docP = new Y.Doc({ gc: false })
+  docP.clientID = 3
+  const docQ = new Y.Doc({ gc: false })
+  docQ.clientID = 4
+  docP.get('prosemirror').applyDelta(
+    delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
+  )
+  Y.applyUpdate(docQ, Y.encodeStateAsUpdate(docP))
+  const rootQ = docQ.get('prosemirror')
+  t.assert(rootQ.delta != null) // materialize the maintained cache
+  let deltaFired = 0
+  let deepFired = 0
+  let observeFired = 0
+  rootQ.on('delta', () => { deltaFired++ })
+  rootQ.observeDeep(() => { deepFired++ })
+  rootQ.observe(() => { observeFired++ })
+  // plain-delete the paragraph on Q — a visible change, fires normally
+  rootQ.applyDelta(delta.create().delete(1).done())
+  t.assert(deltaFired === 1 && observeFired === 1)
+  deltaFired = 0
+  deepFired = 0
+  observeFired = 0
+  // remote edit inside the (invisible) deleted paragraph
+  docP.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(2).insert('XY')).done())
+  Y.applyUpdate(docQ, Y.encodeStateAsUpdate(docP))
+  t.assert(deltaFired === 0, 'no delta emission for an invisible change')
+  t.assert(observeFired === 0, 'v1 observe on the root is unaffected')
+  t.assert(deepFired === 1, 'deep listeners on live ancestors are notified')
+  t.assert(rootQ.delta.equals(rootQ.toDelta({ deep: true })), 'maintained cache stays equal to a fresh render')
+}
+
+/**
+ * A deleted type with its OWN custom renderer keeps firing (its content is still rendered): the
+ * deletion transaction and later remote edits inside the tombstone reach its `observe`/'delta'
+ * and keep its maintained cache current — while a base-renderer root above it stays silent for
+ * changes it cannot see.
+ */
+export const testRdtDeletedTypeWithOwnRendererFires = () => {
+  const { doc, renderer, ytype } = createSuggestionPair(1, 2, false)
+  const parB = /** @type {any} */ (ytype.get(0))
+  parB.useRenderer(renderer)
+  t.assert(parB.delta != null) // materialize the maintained cache
+  t.assert(ytype.delta != null) // root cache, maintained under the base renderer
+  let parFired = 0
+  let parObserved = 0
+  let rootFired = 0
+  parB.on('delta', () => { parFired++ })
+  parB.observe(() => { parObserved++ })
+  ytype.on('delta', () => { rootFired++ })
+  // delete the paragraph (a visible change on the root; the paragraph itself becomes a tombstone
+  // that its own diff renderer still renders)
+  ytype.applyDelta(delta.create().delete(1).done())
+  t.assert(rootFired === 1, 'root fires for its own visible delete')
+  t.assert(parB.delta.equals(parB.toDelta({ deep: true })), 'deleted type cache current after the deletion')
+  const parFiredAfterDelete = parFired
+  // remote format inside the tombstone: the deleted type fires; the base-renderer root renders
+  // nothing and must not emit an empty delta
+  doc.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(1).retain(4, { bold: {} })).done())
+  t.assert(parFired === parFiredAfterDelete + 1, 'deleted type with its own renderer fires delta')
+  t.assert(parObserved >= 1, 'deleted type with its own renderer fires observe')
+  t.assert(rootFired === 1, 'base-renderer root does not emit empty deltas')
+  t.assert(parB.delta.equals(parB.toDelta({ deep: true })), 'deleted type cache current after the remote format')
+  t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'root cache stays equal to a fresh render')
+}
+
+/**
+ * Type-scoped UndoManager: tombstone-subtree transactions now reach `changedParentTypes` (the
+ * scope check), but origin gating still decides capture — an untracked-origin remote change is
+ * not captured.
+ */
+export const testRdtDeletedSubtreeUndoScope = () => {
+  const docP = new Y.Doc({ gc: false })
+  docP.clientID = 5
+  const docQ = new Y.Doc({ gc: false })
+  docQ.clientID = 6
+  docP.get('prosemirror').applyDelta(
+    delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
+  )
+  Y.applyUpdate(docQ, Y.encodeStateAsUpdate(docP))
+  const rootQ = docQ.get('prosemirror')
+  const um = new Y.UndoManager(rootQ)
+  rootQ.applyDelta(delta.create().delete(1).done()) // local delete → captured
+  t.assert(um.undoStack.length === 1)
+  // remote change inside the deleted paragraph with an untracked origin: in scope via the
+  // deleted-parent bubble, but not captured
+  docP.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(2).insert('XY')).done())
+  Y.applyUpdate(docQ, Y.encodeStateAsUpdate(docP), 'remote-origin')
+  t.assert(um.undoStack.length === 1, 'untracked-origin remote change is not captured')
 }
