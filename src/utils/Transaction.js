@@ -13,7 +13,6 @@ import { YEvent } from './YEvent.js'
 import { writeUpdateMessageFromTransaction } from './encoding-helpers.js'
 import { UpdateEncoderV1, UpdateEncoderV2 } from './UpdateEncoder.js'
 import { findIndexSS, updateCurrentFormats, cleanupFormattingGap, tryGcDeleteSet, tryMerge, tryToMergeWithLefts, cleanupContextlessFormattingGap } from './transaction-helpers.js'
-import { baseRenderer } from './renderer-helpers.js'
 import * as random from 'lib0/random'
 
 export const generateNewClientId = random.uint53
@@ -244,8 +243,8 @@ const cleanupTransactions = (transactionCleanups, i) => {
           // We need to think about the possibility that the user transforms the
           // Y.Doc in the event.
           // Deleted types are tracked (so changes inside them bubble to live ancestors) but fire
-          // only while something still renders them — i.e. they have a custom renderer attached.
-          if (type._item !== null && type._item.deleted && type._renderer === baseRenderer) return
+          // only while something still renders them — i.e. they have a renderer attached.
+          if (type._item !== null && type._item.deleted && type._renderer === null) return
           const hasDeep = type._dEH.l.length > 0
           const hasDeltaListeners = (type._observers.get('delta')?.size ?? 0) > 0
           const maintaining = type._delta !== null

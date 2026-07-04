@@ -211,6 +211,25 @@ export class IdSet {
   }
 
   /**
+   * Whether any id in the range `[clock, clock+len)` of `client` is contained in this set.
+   * Allocation-free (binary search).
+   *
+   * @param {number} client
+   * @param {number} clock
+   * @param {number} len
+   * @return {boolean}
+   */
+  intersects (client, clock, len) {
+    const dr = this.clients.get(client)
+    if (dr) {
+      const ranges = dr.getIds()
+      const index = findRangeStartInIdRanges(ranges, clock)
+      return index !== null && ranges[index].clock < clock + len
+    }
+    return false
+  }
+
+  /**
    * Return slices of ids that exist in this idset.
    *
    * @param {number} client

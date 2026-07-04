@@ -778,14 +778,12 @@ const createSuggestionPair = (baseClientID, sdocClientID, useRootRenderer = true
 
 /**
  * A remote base-doc insert into a suggestion-deleted paragraph must reach the root's RDT surface:
- * the tombstone is still rendered by the diff renderer, so the change is visible. The event now
+ * the tombstone is still rendered by the diff renderer, so the change is visible. The event
  * bubbles through the deleted parent (tracked unconditionally in `changedParentTypes`, fired on
- * live ancestors).
- *
- * The final cache-equality assertion is EXPECTED TO FAIL for now: the freshly inserted content is
- * auto-deleted with its parent in the same transaction (`insertSet ∩ deleteSet`), which
- * `YEvent.getDelta` excludes from `itemsToRender` — the delivered change renders the tombstone
- * modify without the new text. Fixing `event.getDelta` is the next step.
+ * live ancestors), and the freshly inserted content — auto-deleted with its parent in the same
+ * transaction (`insertSet ∩ deleteSet`) yet attributed by the renderer — renders as a fresh
+ * insert carrying its delete attribution (`itemsToRender` includes `I∩D ∩ renderer.attributed`),
+ * so the maintained cache stays equal to a fresh deep render.
  */
 export const testRdtDeltaThroughDeletedParent = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
@@ -813,14 +811,113 @@ export const testRdtDeltaThroughDeletedParent = () => {
       console.error('cached:', JSON.stringify(cached.toJSON()))
       console.error('fresh :', JSON.stringify(fresh.toJSON()))
     }
-    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render (expected failure: event.getDelta misses insertSet ∩ deleteSet content)')
+    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
   }
 }
 
 /**
+ * A remote base-doc insert of a whole *nested type* into a suggestion-deleted paragraph: the
+ * fresh paragraph and all of its content are auto-deleted on integration yet attributed by the
+ * renderer, so the change renders it as a deep fresh insert (mode-3 through the ContentType
+ * branch) and the maintained cache stays equal to a fresh deep render.
+ */
+export const testRdtDeltaFreshTypeThroughDeletedParent = () => {
+  for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
+    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ytype.delta != null) // materialize the maintained cache
+    let fired = 0
+    ytype.on('delta', () => { fired++ })
+    // suggestion-delete the whole paragraph (stays rendered as an attributed tombstone)
+    ytype.applyDelta(delta.create().delete(1).done())
+    fired = 0
+    // remote base edit: insert a fresh nested paragraph inside the tombstone
+    const freshParagraph = /** @type {any} */ (delta.create('paragraph', {}, 'fresh'))
+    const inner = /** @type {any} */ (delta.create().retain(2).insert([freshParagraph]))
+    doc.get('prosemirror').applyDelta(delta.create().modify(inner).done())
+    t.assert(fired === 1, 'root delta fires for a fresh nested type inside a suggestion-deleted paragraph')
+    const fresh = ytype.toDelta({ deep: true })
+    t.assert(JSON.stringify(fresh.toJSON()).includes('fresh'), 'fresh render shows the nested type inside the tombstone')
+    const cached = ytype.delta
+    if (!cached.equals(fresh)) {
+      console.error('cached:', JSON.stringify(cached.toJSON()))
+      console.error('fresh :', JSON.stringify(fresh.toJSON()))
+    }
+    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+  }
+}
+
+/**
+ * Content inserted AND suggestion-deleted within the same transaction renders as nothing (a
+ * suggested insert that was taken back is invisible), and the maintained cache stays consistent —
+ * the `insertSet ∩ deleteSet` handling must not leak invisible content into the rendered state.
+ */
+export const testRdtDeltaSuggestedInsertThenDeleteInvisible = () => {
+  for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
+    const { sdoc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ytype.delta != null) // materialize the maintained cache
+    // insert and delete the same content in ONE transaction on the suggestion doc
+    sdoc.transact(() => {
+      const par = /** @type {Y.Type} */ (ytype.get(0))
+      par.applyDelta(delta.create().retain(2).insert('zz').done())
+      par.applyDelta(delta.create().retain(2).delete(2).done())
+    })
+    const fresh = ytype.toDelta({ deep: true })
+    t.assert(!JSON.stringify(fresh.toJSON()).includes('zz'), 'insert-then-deleted suggestion is invisible')
+    const cached = ytype.delta
+    if (!cached.equals(fresh)) {
+      console.error('cached:', JSON.stringify(cached.toJSON()))
+      console.error('fresh :', JSON.stringify(fresh.toJSON()))
+    }
+    t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+  }
+}
+
+/**
+ * Freshness (mode 3) must be decided per id range, not per item: a nested transaction (created
+ * from a 'delta' observer during another transaction's emit loop) has its freshly
+ * inserted+deleted item merged into an older left neighbor by the OUTER transaction's cleanup
+ * (`tryToMergeWithLefts`) before the nested transaction's events render. With a whole-item check
+ * (`insertedItems.hasId(item.id)` — first id only) the fresh range would render as a spurious
+ * `delete` op, removing content the cache legitimately holds.
+ */
+export const testRdtDeltaFreshRangeAfterItemMerge = () => {
+  const doc = new Y.Doc({ gc: false })
+  doc.clientID = 1
+  const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sdoc.clientID = 2
+  const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+  doc.get('t').applyDelta(delta.create().insert('XY').done())
+  const ytype = sdoc.get('t')
+  ytype.useRenderer(renderer)
+  t.assert(ytype.delta != null) // materialize the maintained cache
+  let reacted = false
+  ytype.on('delta', change => {
+    if (reacted || !JSON.stringify(change.toJSON()).includes('"a"')) return
+    reacted = true
+    // nested transaction, cleaned up after the outer one: insert 'b' right after the suggested
+    // 'a' (adjacent clock, same client), then delete both — the outer cleanup merges the two
+    // deleted items into one before this transaction's events render
+    sdoc.transact(() => {
+      ytype.applyDelta(delta.create().retain(1).insert('b').done())
+      ytype.applyDelta(delta.create().delete(2).done())
+    })
+  })
+  // outer transaction: suggested insert 'a' at position 0
+  ytype.applyDelta(delta.create().insert('a').done())
+  t.assert(reacted)
+  const cached = ytype.delta
+  const fresh = ytype.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render')
+}
+
+/**
  * A remote base-doc format inside a suggestion-deleted paragraph: full contract — the root's
- * 'delta' fires and the maintained cache equals a fresh deep render (format markers survive the
- * render paths that the auto-deleted text content does not yet).
+ * 'delta' fires and the maintained cache equals a fresh deep render (fresh-deleted format markers
+ * stay on the retained-marker path of the format state machine).
  */
 export const testRdtDeltaFormatThroughDeletedParent = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {

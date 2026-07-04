@@ -467,7 +467,7 @@ export const testAttributedContent = _tc => {
    */
   const yarray = ydoc.get()
   yarray.insert(0, [1, 2])
-  let renderer = Y.baseRenderer
+  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
 
   ydoc.on('afterTransaction', tr => {
     // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))

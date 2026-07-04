@@ -552,7 +552,7 @@ export const testYmapEventHasCorrectValueWhenSettingAPrimitiveFromOtherUser = tc
 export const testAttributedContent = _tc => {
   const ydoc = new Y.Doc({ gc: false })
   const ymap = ydoc.get()
-  let renderer = baseRenderer
+  let renderer = /** @type {AbstractRenderer?} */ (baseRenderer)
 
   ydoc.on('afterTransaction', tr => {
     // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))

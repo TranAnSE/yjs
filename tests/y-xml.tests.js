@@ -139,7 +139,7 @@ export const testFragmentAttributedContent = _tc => {
   const elem3 = Y.Type.from(delta.create().insert('world'))
   yfragment.insert(0, [elem1, elem2])
   ydoc.get().insert(0, [yfragment])
-  let renderer = Y.baseRenderer
+  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
   ydoc.on('afterTransaction', tr => {
     // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
     renderer = new Y.TwosetRenderer(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, []))
@@ -167,7 +167,7 @@ export const testElementAttributedContent = _tc => {
   const elem2 = delta.create('span').done()
   const elem3 = delta.create().insert('world').done()
   yelement.insert(0, [elem1, elem2])
-  let renderer = Y.baseRenderer
+  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
   ydoc.on('afterTransaction', tr => {
     // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
     renderer = new Y.TwosetRenderer(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, []))

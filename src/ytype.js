@@ -27,7 +27,7 @@ import {
   ContentDoc,
   createContentDocFromDoc
 } from './structs/Item.js'
-import { baseRenderer } from './utils/renderer-helpers.js'
+import { AttributedContent, rendererContentLength } from './utils/renderer-helpers.js'
 import { removeEventHandlerListener, callEventHandlerListeners, addEventHandlerListener, createEventHandler } from './utils/EventHandler.js'
 import { createID } from './utils/ID.js'
 import { createIdSet, iterateStructsByIdSetWithoutSplits } from './utils/ids.js'
@@ -101,7 +101,7 @@ export class ItemTextListPosition {
    * @param {Item|null} right
    * @param {number} index
    * @param {Map<string,any>} currentFormats
-   * @param {AbstractRenderer} renderer
+   * @param {AbstractRenderer?} renderer
    */
   constructor (left, right, index, currentFormats, renderer) {
     this.left = left
@@ -125,7 +125,7 @@ export class ItemTextListPosition {
         }
         break
       default:
-        this.index += this.renderer.contentLength(this.right)
+        this.index += rendererContentLength(this.renderer, this.right)
         break
     }
     this.left = this.right
@@ -152,7 +152,7 @@ export class ItemTextListPosition {
       (length > 0 ||
         (
           negatedFormats.size > 0 &&
-          ((this.right.deleted && this.renderer.contentLength(this.right) === 0) || this.right.content.constructor === ContentFormat)
+          ((this.right.deleted && rendererContentLength(this.renderer, this.right) === 0) || this.right.content.constructor === ContentFormat)
         )
       )
     ) {
@@ -181,23 +181,29 @@ export class ItemTextListPosition {
         }
         default: {
           const item = this.right
-          const rightLen = this.renderer.contentLength(item)
+          const rightLen = rendererContentLength(this.renderer, item)
           if (length < rightLen) {
-            /**
-             * @type {Array<AttributedContent<any>>}
-             */
-            const contents = []
-            this.renderer.readContent(contents, item.id.client, item.id.clock, item.deleted, item.content, 0)
-            let i = 0
-            for (; i < contents.length && length > 0; i++) {
-              const c = contents[i]
-              if ((!c.deleted || c.attrs != null) && c.content.isCountable()) {
-                length -= c.content.getLength()
+            if (this.renderer !== null && this.renderer.hasItem(item)) {
+              /**
+               * @type {Array<AttributedContent<any>>}
+               */
+              const contents = []
+              this.renderer.readContent(contents, item.id.client, item.id.clock, item.deleted, item.content, 0)
+              let i = 0
+              for (; i < contents.length && length > 0; i++) {
+                const c = contents[i]
+                if ((!c.deleted || c.attrs != null) && c.content.isCountable()) {
+                  length -= c.content.getLength()
+                }
               }
-            }
-            if (length < 0 || (length === 0 && i !== contents.length)) {
-              const c = contents[--i]
-              getItemCleanStart(transaction, createID(item.id.client, c.clock + c.content.getLength() + length))
+              if (length < 0 || (length === 0 && i !== contents.length)) {
+                const c = contents[--i]
+                getItemCleanStart(transaction, createID(item.id.client, c.clock + c.content.getLength() + length))
+              }
+            } else {
+              // plain content: split directly at the offset
+              getItemCleanStart(transaction, createID(item.id.client, item.id.clock + length))
+              length = 0
             }
           } else {
             length -= rightLen
@@ -229,7 +235,7 @@ const insertNegatedFormats = (transaction, parent, currPos, negatedFormats) => {
   // check if we really need to remove formats
   while (
     currPos.right !== null && (
-      (currPos.right.deleted && (currPos.renderer === baseRenderer || currPos.renderer.contentLength(currPos.right) === 0)) || (
+      (currPos.right.deleted && rendererContentLength(currPos.renderer, currPos.right) === 0) || (
         currPos.right.content.constructor === ContentFormat &&
         equalFormats(negatedFormats.get(/** @type {ContentFormat} */ (currPos.right.content).key), /** @type {ContentFormat} */ (currPos.right.content).value)
       )
@@ -280,7 +286,7 @@ const minimizeFormatChanges = (currPos, formats) => {
   while (true) {
     if (currPos.right === null) {
       break
-    } else if (currPos.right.deleted ? (currPos.renderer.contentLength(currPos.right) === 0) : (!currPos.right.deleted && currPos.right.content.constructor === ContentFormat && equalFormats(formats[(/** @type {ContentFormat} */ (currPos.right.content)).key] ?? null, /** @type {ContentFormat} */ (currPos.right.content).value))) {
+    } else if (currPos.right.deleted ? (rendererContentLength(currPos.renderer, currPos.right) === 0) : (!currPos.right.deleted && currPos.right.content.constructor === ContentFormat && equalFormats(formats[(/** @type {ContentFormat} */ (currPos.right.content)).key] ?? null, /** @type {ContentFormat} */ (currPos.right.content).value))) {
       //
     } else {
       break
@@ -404,7 +410,7 @@ export const deleteText = (transaction, currPos, length) => {
       }
       length -= item.length
       item.delete(transaction)
-    } else if (currPos.renderer !== baseRenderer) {
+    } else if (currPos.renderer !== null && currPos.renderer.hasItem(item)) {
       /**
        * @type {Array<AttributedContent<any>>}
        */
@@ -632,10 +638,10 @@ export const callTypeObservers = (type, transaction, event) => {
     }
     type = /** @type {YType} */ (type._item.parent)
   }
-  // a deleted type's own observers stay silent (deleted content is invisible) — unless a custom
+  // a deleted type's own observers stay silent (deleted content is invisible) — unless a
   // renderer is attached to it, which may still render the type (mirrors the fire-time rule for
   // `changedParentTypes` targets in `cleanupTransactions`).
-  if (changedType._item === null || !changedType._item.deleted || changedType._renderer !== baseRenderer) {
+  if (changedType._item === null || !changedType._item.deleted || changedType._renderer !== null) {
     callEventHandlerListeners(/** @type {any} */ (changedType._eH), event, transaction)
   }
 }
@@ -715,14 +721,15 @@ export class YType extends ObservableV2 {
     this._hasFormatting = false
     /**
      * The active default renderer. Used by `toDelta`, `applyDelta`, and the events whenever no
-     * explicit renderer is passed. Change it via {@link YType#useRenderer}.
-     * @type {AbstractRenderer}
+     * explicit renderer is passed. `null` = no renderer: content renders as-is via the generic
+     * fast path. Change it via {@link YType#useRenderer}.
+     * @type {AbstractRenderer?}
      */
-    this._renderer = baseRenderer
+    this._renderer = null
     /**
      * Bound listener on the active renderer's `'change'` event — attribution corrections that
      * happen without a Y transaction on this doc (e.g. a suggestion is accepted and the
-     * renderer's attribution overlay updates). `null` while the base renderer is active.
+     * renderer's attribution overlay updates). `null` while no renderer is active.
      * Managed by {@link YType#useRenderer}; see {@link typeApplyRendererChange}.
      * @type {((changes: IdSet, origin: any, local: boolean) => void) | null}
      */
@@ -797,23 +804,23 @@ export class YType extends ObservableV2 {
    * `'delta'` channel only (a renderer switch is not a CRDT change, so no `YEvent` is produced, and
    * the emitted origin is `null` as no transaction is involved).
    *
-   * @param {AbstractRenderer} renderer
+   * @param {AbstractRenderer?} renderer - `null` detaches: content renders as-is again
    * @return {this}
    */
   useRenderer (renderer) {
     const prev = this._renderer
     if (renderer === prev) return this
     if (this._rendererChangeHandler !== null) {
-      prev.off('change', this._rendererChangeHandler)
+      /** @type {AbstractRenderer} */ (prev).off('change', this._rendererChangeHandler)
       this._rendererChangeHandler = null
     }
-    if (renderer !== baseRenderer && this._rendererChangeHandler === null) {
+    if (renderer !== null && this._rendererChangeHandler === null) {
       // attribution corrections (e.g. accepting a suggestion) reach the renderer without a Y
       // transaction on this doc — subscribe so the RDT surface (maintained cache + 'delta'
-      // channel) stays current. The base renderer has no attributions, hence no subscription.
-      // Not gated on `renderer !== prev`: after `destroy()` the handler is removed while
-      // `_renderer` keeps pointing at the renderer, so re-activating with the same renderer must
-      // re-subscribe.
+      // channel) stays current. Without a renderer there are no attributions, hence no
+      // subscription. Not gated on `renderer !== prev`: after `destroy()` the handler is removed
+      // while `_renderer` keeps pointing at the renderer, so re-activating with the same renderer
+      // must re-subscribe.
       this._rendererChangeHandler = (changes, origin) => typeApplyRendererChange(this, changes, origin)
       renderer.on('change', this._rendererChangeHandler)
     }
@@ -835,7 +842,7 @@ export class YType extends ObservableV2 {
 
   /**
    * Tear down this type as an `RDT`: emit the `'destroy'` event, unregister all `'delta'` /
-   * `'destroy'` listeners, and reset the RDT surface (active renderer back to `baseRenderer`, the
+   * `'destroy'` listeners, and reset the RDT surface (active renderer detached, the
    * maintained {@link YType#delta} cache dropped). The CRDT content and the
    * `observe`/`observeDeep` handlers are left untouched — this only releases the RDT/binding
    * observers. Without the reset, a still-materialized cache would keep being maintained through
@@ -845,10 +852,10 @@ export class YType extends ObservableV2 {
    */
   destroy () {
     if (this._rendererChangeHandler !== null) {
-      this._renderer.off('change', this._rendererChangeHandler)
+      /** @type {AbstractRenderer} */ (this._renderer).off('change', this._rendererChangeHandler)
       this._rendererChangeHandler = null
     }
-    this._renderer = baseRenderer
+    this._renderer = null
     this._delta = null
     this.emit('destroy', [this])
     super.destroy()
@@ -987,10 +994,11 @@ export class YType extends ObservableV2 {
    * @template {boolean} [Deep=false]
    *
    * @param {Object} [opts]
-   * @param {AbstractRenderer} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `baseRenderer` unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
    * @param {IdSet?} [opts.itemsToRender]
    * @param {boolean} [opts.retainInserts] - if true, retain rendered inserts with attributions
    * @param {boolean} [opts.retainDeletes] - if true, retain rendered+attributed deletes only
+   * @param {IdSet?} [opts.insertedItems] - ids inserted by the change being rendered; content that is both in `insertedItems` and deleted renders as a *fresh* insert even under `retainDeletes` (it was never part of the consuming state)
    * @param {IdSet?} [opts.deletedItems] - used for computing prevItem in attributes
    * @param {Map<YType,Set<string|null>>|null} [opts.modified] - set of types that should be rendered as modified children
    * @param {Deep} [opts.deep] - render child types as delta
@@ -999,7 +1007,7 @@ export class YType extends ObservableV2 {
    * @public
    */
   toDelta (opts = {}) {
-    const { renderer = this._renderer, itemsToRender = null, retainInserts = false, retainDeletes = false, deletedItems = null, deep = false } = opts
+    const { renderer = this._renderer, itemsToRender = null, retainInserts = false, retainDeletes = false, insertedItems = null, deletedItems = null, deep = false } = opts
     const { modified = (deep && itemsToRender) ? computeModifiedFromItems(/** @type {Doc} */ (this.doc).store, itemsToRender) : null } = opts
     const renderAttrs = modified?.get(this) || null
     const renderChildren = modified == null || !modified.has(this) || /** @type {Set<string|null>} */ (modified.get(this)).has(null)
@@ -1058,264 +1066,389 @@ export class YType extends ObservableV2 {
        */
       let renderedFormatKeys = null
       /**
+       * Renderer output for a single item — a renderer may split an item into multiple
+       * attributed pieces.
        * @type {Array<AttributedContent<any>>}
        */
       const cs = []
-      for (let item = this._start; item !== null; cs.length = 0) {
-        if (itemsToRender != null) {
-          for (; item !== null && cs.length < 50; item = item.right) {
-            const rslice = itemsToRender.slice(item.id.client, item.id.clock, item.length)
-            let itemContent = rslice.length > 1 ? item.content.copy() : item.content
-            for (let ir = 0; ir < rslice.length; ir++) {
-              const idrange = rslice[ir]
-              const content = itemContent
-              if (ir !== rslice.length - 1) {
-                itemContent = itemContent.splice(idrange.len)
-              }
-              renderer.readContent(cs, item.id.client, idrange.clock, item.deleted, content, idrange.exists ? 2 : 0)
-            }
+      /**
+       * Process one piece of (possibly attributed) content — the shared op-emission and format
+       * state machine. The renderer path feeds it every piece produced by `readContent`; the
+       * generic path feeds it `ContentFormat` markers only (the state machine must see every
+       * marker, attributed or not — a plain marker can e.g. close a formerly attributed range)
+       * and emits ops for plain content directly.
+       * @param {AttributedContent<any>} c
+       */
+      const processContent = c => {
+        // render (attributed) content even if it was deleted
+        const renderContent = c.render && (!c.deleted || c.attrs != null)
+        // content that was just deleted. It is not rendered as an insertion, because it doesn't
+        // have any formats.
+        const renderDelete = c.render && c.deleted
+        // existing content that should be retained, only adding changed formats
+        const retainContent = !c.render && (!c.deleted || c.attrs != null)
+        const attribution = (renderContent || c.content.constructor === ContentFormat) ? createAttributionFromAttributionItems(c.attrs, c.deleted) : undefined
+        switch (c.content.constructor) {
+          case ContentDeleted: {
+            // fresh (mode 3) content renders as nothing here: the consuming state never saw it,
+            // and gc'd content cannot render as an insert — a delete op would misapply
+            if (renderDelete && !c.fresh) d.delete(c.content.getLength())
+            break
           }
-        } else {
-          for (; item !== null && cs.length < 50; item = item.right) {
-            renderer.readContent(cs, item.id.client, item.id.clock, item.deleted, item.content, 1)
-          }
-        }
-        for (let i = 0; i < cs.length; i++) {
-          const c = cs[i]
-          // render (attributed) content even if it was deleted
-          const renderContent = c.render && (!c.deleted || c.attrs != null)
-          // content that was just deleted. It is not rendered as an insertion, because it doesn't
-          // have any formats.
-          const renderDelete = c.render && c.deleted
-          // existing content that should be retained, only adding changed formats
-          const retainContent = !c.render && (!c.deleted || c.attrs != null)
-          const attribution = (renderContent || c.content.constructor === ContentFormat) ? createAttributionFromAttributionItems(c.attrs, c.deleted) : undefined
-          switch (c.content.constructor) {
-            case ContentDeleted: {
-              if (renderDelete) d.delete(c.content.getLength())
-              break
-            }
-            case ContentString:
-              if (renderContent) {
-                if (c.deleted ? retainDeletes : retainInserts) {
-                  // a retain expresses the format *diff* against existing (cached) content, so use
-                  // `changedFormats`: a format removed this change (e.g. its marker was deleted)
-                  // is present there as a `null` clear, whereas `currentFormats` (absolute) can
-                  // only re-assert present formats and would silently keep a stale one.
-                  d.usedFormats = changedFormats
-                  usingChangedFormats = true
-                  // change render: a retained item with no attribution means its attribution was
-                  // removed → emit a clear rather than `{}` (skip). Present attribution merges.
-                  d.retain(/** @type {ContentString} */ (c.content).str.length, undefined, attribution ?? clearedOwnAttribution())
-                } else {
-                  d.usedFormats = currentFormats
-                  usingCurrentFormats = true
-                  d.insert(/** @type {ContentString} */ (c.content).str, undefined, attribution)
-                }
-              } else if (renderDelete) {
-                d.delete(c.content.getLength())
-              } else if (retainContent) {
+          case ContentString:
+            if (renderContent) {
+              if (c.deleted ? (retainDeletes && !c.fresh) : retainInserts) {
+                // a retain expresses the format *diff* against existing (cached) content, so use
+                // `changedFormats`: a format removed this change (e.g. its marker was deleted)
+                // is present there as a `null` clear, whereas `currentFormats` (absolute) can
+                // only re-assert present formats and would silently keep a stale one.
+                // (`c.fresh` content is exempt from `retainDeletes`: it was inserted *and*
+                // deleted by this very change, so the consuming state holds nothing to retain —
+                // it renders as an insert below, carrying its attribution.)
                 d.usedFormats = changedFormats
                 usingChangedFormats = true
-                d.retain(c.content.getLength())
+                // change render: a retained item with no attribution means its attribution was
+                // removed → emit a clear rather than `{}` (skip). Present attribution merges.
+                d.retain(/** @type {ContentString} */ (c.content).str.length, undefined, attribution ?? clearedOwnAttribution())
+              } else {
+                d.usedFormats = currentFormats
+                usingCurrentFormats = true
+                d.insert(/** @type {ContentString} */ (c.content).str, undefined, attribution)
               }
-              break
-            case ContentEmbed:
-            case ContentAny:
-            case ContentJSON:
-            case ContentType:
-            case ContentBinary:
-              if (renderContent) {
-                if (c.deleted ? retainDeletes : retainInserts) {
-                  // a retain expresses the format *diff* → use `changedFormats` (see ContentString)
-                  d.usedFormats = changedFormats
-                  usingChangedFormats = true
-                  if (c.deleted && c.content.constructor === ContentType) {
-                    // @todo use current transaction instead
-                    d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll), undefined, attribution ?? null)
-                  } else {
-                    d.retain(c.content.getLength(), undefined, attribution ?? clearedOwnAttribution())
-                  }
-                } else if (deep && c.content.constructor === ContentType) {
-                  d.usedFormats = currentFormats
-                  usingCurrentFormats = true
-                  d.insert([/** @type {any} */(c.content).type.toDelta(optsAll)], undefined, attribution)
-                } else {
-                  d.usedFormats = currentFormats
-                  usingCurrentFormats = true
-                  d.insert(c.content.getContent(), undefined, attribution)
-                }
-              } else if (renderDelete) {
-                d.delete(1)
-              } else if (retainContent) {
-                if (c.content.constructor === ContentType && modified?.has(/** @type {ContentType} */ (c.content).type)) {
+            } else if (renderDelete) {
+              d.delete(c.content.getLength())
+            } else if (retainContent) {
+              d.usedFormats = changedFormats
+              usingChangedFormats = true
+              d.retain(c.content.getLength())
+            }
+            break
+          case ContentEmbed:
+          case ContentAny:
+          case ContentJSON:
+          case ContentType:
+          case ContentBinary:
+          case ContentDoc:
+            if (renderContent) {
+              if (c.deleted ? (retainDeletes && !c.fresh) : retainInserts) {
+                // a retain expresses the format *diff* → use `changedFormats` (see ContentString)
+                d.usedFormats = changedFormats
+                usingChangedFormats = true
+                if (c.deleted && c.content.constructor === ContentType) {
                   // @todo use current transaction instead
-                  d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll))
+                  d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll), undefined, attribution ?? null)
                 } else {
-                  d.usedFormats = changedFormats
-                  usingChangedFormats = true
-                  d.retain(1)
+                  d.retain(c.content.getLength(), undefined, attribution ?? clearedOwnAttribution())
                 }
+              } else if (deep && c.content.constructor === ContentType) {
+                d.usedFormats = currentFormats
+                usingCurrentFormats = true
+                d.insert([/** @type {any} */(c.content).type.toDelta(optsAll)], undefined, attribution)
+              } else {
+                d.usedFormats = currentFormats
+                usingCurrentFormats = true
+                d.insert(c.content.getContent(), undefined, attribution)
               }
-              break
-            case ContentFormat: {
-              const { key, value } = /** @type {ContentFormat} */ (c.content)
-              const currFormatVal = currentFormats[key] ?? null
-              if (attribution != null && (c.deleted || !object.hasProperty(previousUnattributedFormats, key))) {
-                previousUnattributedFormats[key] = c.deleted ? value : currFormatVal
+            } else if (renderDelete) {
+              d.delete(1)
+            } else if (retainContent) {
+              if (c.content.constructor === ContentType && modified?.has(/** @type {ContentType} */ (c.content).type)) {
+                // @todo use current transaction instead
+                d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll))
+              } else {
+                d.usedFormats = changedFormats
+                usingChangedFormats = true
+                d.retain(1)
               }
-              // @todo write a function "updateCurrentFormats" and "updateChangedFormats"
-              // # Update Formats
-              if (renderContent || renderDelete) {
-                // create fresh references
-                if (usingCurrentFormats) {
-                  currentFormats = object.assign({}, currentFormats)
-                  usingCurrentFormats = false
-                }
-                if (usingChangedFormats) {
-                  usingChangedFormats = false
-                  changedFormats = object.assign({}, changedFormats)
-                }
+            }
+            break
+          case ContentFormat: {
+            const { key, value } = /** @type {ContentFormat} */ (c.content)
+            const currFormatVal = currentFormats[key] ?? null
+            if (attribution != null && (c.deleted || !object.hasProperty(previousUnattributedFormats, key))) {
+              previousUnattributedFormats[key] = c.deleted ? value : currFormatVal
+            }
+            // @todo write a function "updateCurrentFormats" and "updateChangedFormats"
+            // # Update Formats
+            if (renderContent || renderDelete) {
+              // create fresh references
+              if (usingCurrentFormats) {
+                currentFormats = object.assign({}, currentFormats)
+                usingCurrentFormats = false
               }
-              if (renderContent || renderDelete) {
-                if (itemsToRender !== null && renderer !== baseRenderer) {
-                  // only attributing change renders consult this (see the reset branch below)
-                  if (renderedFormatKeys === null) renderedFormatKeys = new Set()
-                  renderedFormatKeys.add(key)
-                }
-                if (c.deleted) {
-                  // content was deleted, but is possibly attributed
-                  if (!equalFormats(value, currFormatVal)) { // do nothing if nothing changed
-                    if (equalFormats(currFormatVal, previousFormats[key] ?? null) && changedFormats[key] !== undefined) {
-                      delete changedFormats[key]
-                    } else {
-                      changedFormats[key] = currFormatVal
-                    }
-                    // current formats doesn't change
-                    previousFormats[key] = value
-                  }
-                } else { // !c.deleted
-                  // content was inserted, and is possibly attributed
-                  if (equalFormats(value, currFormatVal)) {
-                    // item.delete(transaction)
-                  } else if (equalFormats(value, previousFormats[key] ?? null)) {
+              if (usingChangedFormats) {
+                usingChangedFormats = false
+                changedFormats = object.assign({}, changedFormats)
+              }
+            }
+            if (renderContent || renderDelete) {
+              if (itemsToRender !== null && renderer !== null) {
+                // only attributing change renders consult this (see the reset branch below)
+                if (renderedFormatKeys === null) renderedFormatKeys = new Set()
+                renderedFormatKeys.add(key)
+              }
+              if (c.deleted) {
+                // content was deleted, but is possibly attributed
+                if (!equalFormats(value, currFormatVal)) { // do nothing if nothing changed
+                  if (equalFormats(currFormatVal, previousFormats[key] ?? null) && changedFormats[key] !== undefined) {
                     delete changedFormats[key]
                   } else {
-                    changedFormats[key] = value
+                    changedFormats[key] = currFormatVal
                   }
-                  if (value == null) {
-                    delete currentFormats[key]
-                  } else {
-                    currentFormats[key] = value
-                  }
+                  // current formats doesn't change
+                  previousFormats[key] = value
                 }
-              } else if (retainContent && !c.deleted) {
-                // fresh reference to currentFormats only
-                if (usingCurrentFormats) {
-                  currentFormats = object.assign({}, currentFormats)
-                  usingCurrentFormats = false
-                }
-                if (usingChangedFormats && changedFormats[key] !== undefined) {
-                  usingChangedFormats = false
-                  changedFormats = object.assign({}, changedFormats)
+              } else { // !c.deleted
+                // content was inserted, and is possibly attributed
+                if (equalFormats(value, currFormatVal)) {
+                  // item.delete(transaction)
+                } else if (equalFormats(value, previousFormats[key] ?? null)) {
+                  delete changedFormats[key]
+                } else {
+                  changedFormats[key] = value
                 }
                 if (value == null) {
                   delete currentFormats[key]
                 } else {
                   currentFormats[key] = value
                 }
-                delete changedFormats[key]
-                previousFormats[key] = value
               }
-              // # Update Attributions
-              // A format marker deleted in a change render under an *attributing* renderer nets to no
-              // attribution (its insert+delete suggestion cancels → `attribution == null`), yet it ends
-              // the attributed range it opened: the following retained content must drop the stale
-              // `{ format: { [key]: [] } }` the marker's insertion wrote to the cache. Emit an explicit
-              // `null` leaf for the key (a context-wide `useAttribution(null)` cannot carry a per-key
-              // clear). Conditions: only an attributing render (`renderer !== baseRenderer`; the base
-              // renderer has no attributions to clear), and only when the deletion actually *removes*
-              // the format — i.e. it reverts to no value (`currFormatVal == null`). If it reverts to a
-              // still-present surrounding value (e.g. deleting a `bold:null` marker re-exposes an
-              // enclosing attributed `bold:true`, as when re-bolding), the attribution is preserved.
-              const isDeletedFormatClear = attribution == null && renderer !== baseRenderer && renderDelete && c.deleted && itemsToRender != null && currFormatVal == null && !equalFormats(value, currFormatVal)
-              // The alive-marker analogue of `isDeletedFormatClear`: a format marker whose
-              // *attribution* was removed while the marker survives — its suggestion was accepted
-              // (the marker's id arrives via the renderer's `'change'` event). The original change
-              // render stamped `{ format: { [key]: [] } }` on the spans this marker governs, so the
-              // heal render must emit a per-key `null` leaf over those spans (a blunt
-              // `attribution: null` would also wipe unrelated attributions such as a co-located
-              // `{ delete: [] }`). Gated on `retainInserts` — the diff-against-existing-content
-              // mode used by attribution-heal renders: in a plain event render an unattributed
-              // alive marker is just new unattributed content and must not emit spurious clears.
-              // When the key is tracked as an open attributed range (`previousUnattributedFormats`)
-              // the accepted marker instead defers to the regular branch chain below, which mirrors
-              // the fresh render exactly: mid-range it *keeps* the ambient attribution (relative to
-              // the base doc the span's format is still a suggested change), and at the range end
-              // (`sameAsPreviousAttributions`) it closes the attribution context.
-              const isAcceptedFormatClear = attribution == null && renderer !== baseRenderer && renderContent && !c.deleted && itemsToRender != null && retainInserts && !object.hasProperty(previousUnattributedFormats, key)
-              if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || object.hasProperty(previousUnattributedFormats, key)) {
-                /**
+            } else if (retainContent && !c.deleted) {
+              // fresh reference to currentFormats only
+              if (usingCurrentFormats) {
+                currentFormats = object.assign({}, currentFormats)
+                usingCurrentFormats = false
+              }
+              if (usingChangedFormats && changedFormats[key] !== undefined) {
+                usingChangedFormats = false
+                changedFormats = object.assign({}, changedFormats)
+              }
+              if (value == null) {
+                delete currentFormats[key]
+              } else {
+                currentFormats[key] = value
+              }
+              delete changedFormats[key]
+              previousFormats[key] = value
+            }
+            // # Update Attributions
+            // A format marker deleted in a change render under an *attributing* renderer nets to no
+            // attribution (its insert+delete suggestion cancels → `attribution == null`), yet it ends
+            // the attributed range it opened: the following retained content must drop the stale
+            // `{ format: { [key]: [] } }` the marker's insertion wrote to the cache. Emit an explicit
+            // `null` leaf for the key (a context-wide `useAttribution(null)` cannot carry a per-key
+            // clear). Conditions: only an attributing render (`renderer !== null`; without a
+            // renderer there are no attributions to clear), and only when the deletion actually *removes*
+            // the format — i.e. it reverts to no value (`currFormatVal == null`). If it reverts to a
+            // still-present surrounding value (e.g. deleting a `bold:null` marker re-exposes an
+            // enclosing attributed `bold:true`, as when re-bolding), the attribution is preserved.
+            const isDeletedFormatClear = attribution == null && renderer !== null && renderDelete && c.deleted && itemsToRender != null && currFormatVal == null && !equalFormats(value, currFormatVal)
+            // The alive-marker analogue of `isDeletedFormatClear`: a format marker whose
+            // *attribution* was removed while the marker survives — its suggestion was accepted
+            // (the marker's id arrives via the renderer's `'change'` event). The original change
+            // render stamped `{ format: { [key]: [] } }` on the spans this marker governs, so the
+            // heal render must emit a per-key `null` leaf over those spans (a blunt
+            // `attribution: null` would also wipe unrelated attributions such as a co-located
+            // `{ delete: [] }`). Gated on `retainInserts` — the diff-against-existing-content
+            // mode used by attribution-heal renders: in a plain event render an unattributed
+            // alive marker is just new unattributed content and must not emit spurious clears.
+            // When the key is tracked as an open attributed range (`previousUnattributedFormats`)
+            // the accepted marker instead defers to the regular branch chain below, which mirrors
+            // the fresh render exactly: mid-range it *keeps* the ambient attribution (relative to
+            // the base doc the span's format is still a suggested change), and at the range end
+            // (`sameAsPreviousAttributions`) it closes the attribution context.
+            const isAcceptedFormatClear = attribution == null && renderer !== null && renderContent && !c.deleted && itemsToRender != null && retainInserts && !object.hasProperty(previousUnattributedFormats, key)
+            if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || object.hasProperty(previousUnattributedFormats, key)) {
+              /**
                  * @type {Attribution}
                  */
-                const formattingAttribution = object.assign({}, d.usedAttribution)
-                const changedAttributedFormats = /** @type {{ [key: string]: Array<any>|null }} */ (formattingAttribution.format = object.assign({}, formattingAttribution.format ?? {}))
-                const sameAsPreviousAttributions = equalFormats(previousUnattributedFormats[key], currentFormats[key] ?? null)
-                if (isDeletedFormatClear || (isAcceptedFormatClear && changedAttributedFormats[key] == null)) {
-                  // uniformly emit the per-key clear — also for a marker that *ends* a formerly
-                  // attributed range: the attributed render emits a trailing per-key `null` past
-                  // the closing marker as well (see the `attribution != null` case below), so the
-                  // heal render mirrors that exact span; where the cache holds no stale
-                  // attribution the clear merges as a no-op.
+              const formattingAttribution = object.assign({}, d.usedAttribution)
+              const changedAttributedFormats = /** @type {{ [key: string]: Array<any>|null }} */ (formattingAttribution.format = object.assign({}, formattingAttribution.format ?? {}))
+              const sameAsPreviousAttributions = equalFormats(previousUnattributedFormats[key], currentFormats[key] ?? null)
+              if (isDeletedFormatClear || (isAcceptedFormatClear && changedAttributedFormats[key] == null)) {
+                // uniformly emit the per-key clear — also for a marker that *ends* a formerly
+                // attributed range: the attributed render emits a trailing per-key `null` past
+                // the closing marker as well (see the `attribution != null` case below), so the
+                // heal render mirrors that exact span; where the cache holds no stale
+                // attribution the clear merges as a no-op.
+                changedAttributedFormats[key] = null
+                delete previousUnattributedFormats[key]
+              } else if (isAcceptedFormatClear) {
+                // accepted marker inside a *still-attributed* (pending) range for the same key —
+                // the ambient context holds an attributor list, not a clear. Relative to the base
+                // doc the effective format of this span is still a suggested change, so the fresh
+                // render keeps attributing it (the `skip` case below): keep the ambient
+                // attribution rather than clearing it.
+              } else if (attribution == null && !sameAsPreviousAttributions) {
+                // skip
+              } else if (attribution == null || sameAsPreviousAttributions) {
+                // an unattributed format was found or an attributed format
+                // was found that resets to the previous status. When this format item is
+                // itself rendered this transaction (`renderContent || renderDelete`) in a change/diff
+                // render (`itemsToRender != null`), it is the END of an attributed format range:
+                // emit an explicit clear (a `null` leaf) so the retained content drops any stale
+                // `{ format: { [key]: [] } }` from the maintained `delta` cache — a bare context-skip
+                // (`delete`) would leave it in place. The same applies to a *retained* attributed
+                // boundary when a rendered same-key marker preceded it in this walk
+                // (`renderedFormatKeys`): the boundary only resets-to-previous *because of* the
+                // rendered change (e.g. a base-doc format arriving under an equal same-key format
+                // suggestion — which marker comes first depends on client ids), so the spans it
+                // governs must drop their now-stale attribution too. For a merely-retained boundary
+                // with no rendered same-key marker, or a full insert render (removal is already
+                // modeled as absence in `currentFormats`), just drop the key: a change render must
+                // not emit ops for unchanged ranges, and inserts must stay free of a spurious
+                // `{ format: { [key]: null } }`.
+                if (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true)) {
                   changedAttributedFormats[key] = null
-                  delete previousUnattributedFormats[key]
-                } else if (isAcceptedFormatClear) {
-                  // accepted marker inside a *still-attributed* (pending) range for the same key —
-                  // the ambient context holds an attributor list, not a clear. Relative to the base
-                  // doc the effective format of this span is still a suggested change, so the fresh
-                  // render keeps attributing it (the `skip` case below): keep the ambient
-                  // attribution rather than clearing it.
-                } else if (attribution == null && !sameAsPreviousAttributions) {
-                  // skip
-                } else if (attribution == null || sameAsPreviousAttributions) {
-                  // an unattributed format was found or an attributed format
-                  // was found that resets to the previous status. When this format item is
-                  // itself rendered this transaction (`renderContent || renderDelete`) in a change/diff
-                  // render (`itemsToRender != null`), it is the END of an attributed format range:
-                  // emit an explicit clear (a `null` leaf) so the retained content drops any stale
-                  // `{ format: { [key]: [] } }` from the maintained `delta` cache — a bare context-skip
-                  // (`delete`) would leave it in place. The same applies to a *retained* attributed
-                  // boundary when a rendered same-key marker preceded it in this walk
-                  // (`renderedFormatKeys`): the boundary only resets-to-previous *because of* the
-                  // rendered change (e.g. a base-doc format arriving under an equal same-key format
-                  // suggestion — which marker comes first depends on client ids), so the spans it
-                  // governs must drop their now-stale attribution too. For a merely-retained boundary
-                  // with no rendered same-key marker, or a full insert render (removal is already
-                  // modeled as absence in `currentFormats`), just drop the key: a change render must
-                  // not emit ops for unchanged ranges, and inserts must stay free of a spurious
-                  // `{ format: { [key]: null } }`.
-                  if (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true)) {
-                    changedAttributedFormats[key] = null
-                  } else {
-                    delete changedAttributedFormats[key]
-                  }
-                  delete previousUnattributedFormats[key]
                 } else {
-                  const by = changedAttributedFormats[key] = (changedAttributedFormats[key]?.slice() ?? [])
-                  by.push(...((c.deleted ? attribution.delete : attribution.insert) ?? []))
-                  const attributedAt = (c.deleted ? attribution.deleteAt : attribution.insertAt)
-                  if (attributedAt) formattingAttribution.formatAt = attributedAt
+                  delete changedAttributedFormats[key]
                 }
-                if (object.isEmpty(changedAttributedFormats)) {
-                  d.useAttribution(null)
-                } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear) {
-                  const attributedAt = (c.deleted ? attribution?.deleteAt : attribution?.insertAt)
-                  if (attributedAt != null) formattingAttribution.formatAt = attributedAt
-                  d.useAttribution(formattingAttribution)
+                delete previousUnattributedFormats[key]
+              } else {
+                const by = changedAttributedFormats[key] = (changedAttributedFormats[key]?.slice() ?? [])
+                by.push(...((c.deleted ? attribution.delete : attribution.insert) ?? []))
+                const attributedAt = (c.deleted ? attribution.deleteAt : attribution.insertAt)
+                if (attributedAt) formattingAttribution.formatAt = attributedAt
+              }
+              if (object.isEmpty(changedAttributedFormats)) {
+                d.useAttribution(null)
+              } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear) {
+                const attributedAt = (c.deleted ? attribution?.deleteAt : attribution?.insertAt)
+                if (attributedAt != null) formattingAttribution.formatAt = attributedAt
+                d.useAttribution(formattingAttribution)
+              }
+            }
+            break
+          }
+        }
+      }
+      for (let item = this._start; item !== null; item = item.right) {
+        const content = item.content
+        if (renderer === null || !renderer.hasItem(item)) {
+          // generic fast path: content the renderer doesn't claim renders as-is — no attribution
+          // lookups, no AttributedContent wrappers and, in the common full-coverage case, no
+          // content slicing
+          if (content.constructor === ContentFormat) {
+            // format markers always flow through the shared state machine
+            processContent(new AttributedContent(content, item.id.clock, item.deleted, null,
+              itemsToRender == null ? 1 : (itemsToRender.has(item.id.client, item.id.clock) ? 2 : 0)))
+          } else if (item.deleted) {
+            // plain deleted content is invisible; in a change render, the ranges deleted by this
+            // change emit `delete` ops — position-only, the content itself is not needed
+            if (itemsToRender !== null && itemsToRender.intersects(item.id.client, item.id.clock, item.length)) {
+              const rslice = itemsToRender.slice(item.id.client, item.id.clock, item.length)
+              for (let ir = 0; ir < rslice.length; ir++) {
+                const idrange = rslice[ir]
+                if (idrange.exists) {
+                  // mirror the piece-wise op sizes of the renderer path: string-ish content
+                  // deletes by length, other content deletes one element per piece
+                  d.delete((content.constructor === ContentString || content.constructor === ContentDeleted) ? idrange.len : 1)
                 }
               }
-              break
             }
+          } else if (itemsToRender == null) {
+            if (retainInserts) {
+              // attribution-overlay render (e.g. `toDelta({ renderer, retainInserts: true })`):
+              // existing content is retained, clearing any formerly cached own-attribution
+              d.usedFormats = changedFormats
+              usingChangedFormats = true
+              d.retain(content.getLength(), undefined, clearedOwnAttribution())
+            } else {
+              // full render: a plain insert of the whole item
+              d.usedFormats = currentFormats
+              usingCurrentFormats = true
+              if (deep && content.constructor === ContentType) {
+                d.insert([/** @type {any} */(content).type.toDelta(optsAll)])
+              } else if (content.constructor === ContentString) {
+                d.insert(/** @type {ContentString} */ (content).str)
+              } else {
+                d.insert(content.getContent())
+              }
+            }
+          } else {
+            // change render on alive plain content: inserted ranges become inserts, everything
+            // else retains (position-only). `retainInserts` (attribution-heal renders) retains
+            // previously inserted content while clearing its former attribution.
+            const rslice = itemsToRender.slice(item.id.client, item.id.clock, item.length)
+            let itemContent = rslice.length > 1 ? content.copy() : content
+            for (let ir = 0; ir < rslice.length; ir++) {
+              const idrange = rslice[ir]
+              const c = itemContent
+              if (ir !== rslice.length - 1) {
+                itemContent = itemContent.splice(idrange.len)
+              }
+              if (!idrange.exists) {
+                if (content.constructor === ContentType && modified?.has(/** @type {ContentType} */ (content).type)) {
+                  // @todo use current transaction instead
+                  d.modify(/** @type {ContentType} */ (content).type.toDelta(optsAll))
+                } else {
+                  d.usedFormats = changedFormats
+                  usingChangedFormats = true
+                  // mirror the piece-wise op sizes of the renderer path (see the delete branch)
+                  d.retain(content.constructor === ContentString ? idrange.len : 1)
+                }
+              } else if (retainInserts) {
+                d.usedFormats = changedFormats
+                usingChangedFormats = true
+                d.retain(idrange.len, undefined, clearedOwnAttribution())
+              } else {
+                d.usedFormats = currentFormats
+                usingCurrentFormats = true
+                if (deep && content.constructor === ContentType) {
+                  d.insert([/** @type {any} */(content).type.toDelta(optsAll)])
+                } else if (content.constructor === ContentString) {
+                  d.insert(/** @type {ContentString} */ (c).str)
+                } else {
+                  d.insert(c.getContent())
+                }
+              }
+            }
+          }
+        } else {
+          cs.length = 0
+          if (itemsToRender != null) {
+            const rslice = itemsToRender.slice(item.id.client, item.id.clock, item.length)
+            // fresh content deleted by the very change being rendered gets mode 3: it renders as
+            // an insert even under `retainDeletes` — the consuming state (e.g. the maintained
+            // `delta` cache) has never seen it, so there is nothing to retain. Freshness is
+            // decided per id range, NOT per item: structs merge across cleanups (e.g. a queued
+            // transaction's render runs after an earlier finally-block merged its fresh item into
+            // an older neighbor), so one item can span fresh and pre-existing ids. ContentFormat
+            // markers are exempt and keep mode 0 (the retained-marker path; they never merge, so
+            // the whole-item check is exact): the format state machine treats fresh-deleted
+            // markers exactly like before this change rendered.
+            const checkFresh = item.deleted && insertedItems !== null && content.constructor !== ContentFormat
+            const freshFormat = item.deleted && insertedItems !== null && content.constructor === ContentFormat && insertedItems.hasId(item.id)
+            let itemContent = rslice.length > 1 ? content.copy() : content
+            for (let ir = 0; ir < rslice.length; ir++) {
+              const idrange = rslice[ir]
+              let c = itemContent
+              if (ir !== rslice.length - 1) {
+                itemContent = itemContent.splice(idrange.len)
+              }
+              if (!idrange.exists || !checkFresh) {
+                renderer.readContent(cs, item.id.client, idrange.clock, item.deleted, c,
+                  idrange.exists ? (freshFormat ? 0 : 2) : 0)
+              } else {
+                // an exists range may itself straddle fresh and pre-existing ids (ranges from
+                // different sources merge in `itemsToRender`) — split it against `insertedItems`
+                const fslice = insertedItems.slice(item.id.client, idrange.clock, idrange.len)
+                let subContent = fslice.length > 1 ? c.copy() : c
+                for (let fi = 0; fi < fslice.length; fi++) {
+                  const frange = fslice[fi]
+                  c = subContent
+                  if (fi !== fslice.length - 1) {
+                    subContent = subContent.splice(frange.len)
+                  }
+                  renderer.readContent(cs, item.id.client, frange.clock, item.deleted, c, frange.exists ? 3 : 2)
+                }
+              }
+            }
+          } else {
+            renderer.readContent(cs, item.id.client, item.id.clock, item.deleted, content, 1)
+          }
+          for (let i = 0; i < cs.length; i++) {
+            processContent(cs[i])
           }
         }
       }
@@ -1328,7 +1461,7 @@ export class YType extends ObservableV2 {
    * attributions.
    *
    * @param {Object} [opts]
-   * @param {AbstractRenderer} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `baseRenderer` unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
    * @return {delta.Delta<DConf>}
    */
   toDeltaDeep (opts = {}) {
@@ -1343,7 +1476,7 @@ export class YType extends ObservableV2 {
    * `transaction.origin` and forwarded verbatim on the emitted `'delta'` event, so listeners can
    * recognize — and skip — changes they produced themselves; see the lib0 `RDT` spec). Defaults to `null`.
    * @param {Object} [opts]
-   * @param {AbstractRenderer} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `baseRenderer` unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
    * @return {null} The lib0 `RDT` "fix" of this apply — always `null`: a `YType` accepts every valid
    * delta as-is and never needs to self-correct.
    *
@@ -2203,7 +2336,7 @@ export const typeMapGetAll = (parent) => {
  * @param {TypeDelta} d
  * @param {YType} parent
  * @param {Set<string|null>?} attrsToRender
- * @param {AbstractRenderer} renderer
+ * @param {AbstractRenderer?} renderer
  * @param {boolean} deep
  * @param {Set<YType>|Map<YType,any>|null} [modified] - set of types that should be rendered as modified children
  * @param {IdSet?} [deletedItems]
@@ -2222,12 +2355,22 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
    */
   const renderAttrs = (item, key) => {
     /**
-     * @type {Array<AttributedContent>}
+     * @type {{ deleted: boolean, attrs: Array<ContentAttribute<any>>?, content: AbstractContent }}
      */
-    const cs = []
-    renderer.readContent(cs, item.id.client, item.id.clock, item.deleted, item.content, 1)
-    if (cs.length === 0) return // the renderer surfaces nothing for this attribute (e.g. a diff renderer hiding an unchanged delete)
-    const { deleted, attrs, content } = cs[cs.length - 1]
+    let piece
+    if (renderer === null || !renderer.hasItem(item)) {
+      // generic fast path — the item's own fields, no renderer involved
+      piece = { deleted: item.deleted, attrs: null, content: item.content }
+    } else {
+      /**
+       * @type {Array<AttributedContent<any>>}
+       */
+      const cs = []
+      renderer.readContent(cs, item.id.client, item.id.clock, item.deleted, item.content, 1)
+      if (cs.length === 0) return // the renderer surfaces nothing for this attribute (e.g. a diff renderer hiding an unchanged delete)
+      piece = cs[cs.length - 1]
+    }
+    const { deleted, attrs, content } = piece
     const attribution = createAttributionFromAttributionItems(attrs, deleted)
     let c = array.last(content.getContent())
     if (deleted) {

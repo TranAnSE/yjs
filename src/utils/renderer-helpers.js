@@ -2,6 +2,8 @@ import * as s from 'lib0/schema'
 import * as error from 'lib0/error'
 import { ObservableV2 } from 'lib0/observable'
 
+import { createIdSet } from './ids.js'
+
 export const attributionJsonSchema = s.$object({
   insert: s.$array(s.$string).optional,
   insertAt: s.$number.optional,
@@ -26,7 +28,7 @@ export class AttributedContent {
    * @param {number} clock
    * @param {boolean} deleted
    * @param {Array<ContentAttribute<T>> | null} attrs
-   * @param {0|1|2} renderBehavior
+   * @param {0|1|2|3} renderBehavior
    */
   constructor (content, clock, deleted, attrs, renderBehavior) {
     this.content = content
@@ -34,6 +36,12 @@ export class AttributedContent {
     this.deleted = deleted
     this.attrs = attrs
     this.render = renderBehavior === 0 ? false : (renderBehavior === 1 ? (!deleted || attrs != null) : true)
+    /**
+     * Fresh content that was deleted in the same transaction (mode `3`): even in a
+     * `retainDeletes` render it must produce an *insert* — the consuming state (e.g. the
+     * maintained `delta` cache) has never seen this content, so there is nothing to retain.
+     */
+    this.fresh = renderBehavior === 3
   }
 }
 
@@ -43,16 +51,43 @@ export class AttributedContent {
  * Should fire an event when the attributions changed _after_ the original change happens. This
  * Event will be used to update the attribution on the current content.
  *
+ * Only items claimed via {@link AbstractRenderer#hasItem} reach the renderer — everything else is
+ * rendered by the generic fast path (as-is, without attributions, deleted content invisible).
+ *
  * @extends {ObservableV2<{change:(idset:IdSet,origin:any,local:boolean)=>void}>}
  */
 export class AbstractRenderer extends ObservableV2 {
+  constructor () {
+    super()
+    /**
+     * Ids of the content this renderer may render non-normally (attributed, restored, hidden, …).
+     * May over-approximate — {@link AbstractRenderer#readContent} remains authoritative for what
+     * is actually rendered. Content outside this set is rendered by the generic fast path without
+     * consulting the renderer.
+     *
+     * @type {IdSet}
+     */
+    this.attributed = createIdSet()
+  }
+
+  /**
+   * Whether `item` (any part of its id range) must be rendered by this renderer. Items for which
+   * this returns `false` are rendered by the generic fast path.
+   *
+   * @param {Item} item
+   * @return {boolean}
+   */
+  hasItem (item) {
+    return this.attributed.intersects(item.id.client, item.id.clock, item.length)
+  }
+
   /**
    * @param {Array<AttributedContent<any>>} _contents - where to write the result
    * @param {number} _client
    * @param {number} _clock
    * @param {boolean} _deleted
    * @param {AbstractContent} _content
-   * @param {0|1|2} _shouldRender - 0: if undeleted or attributed, render as a retain operation. 1: render only if undeleted or attributed. 2: render as insert operation (if unattributed and deleted, render as delete).
+   * @param {0|1|2|3} _shouldRender - 0: if undeleted or attributed, render as a retain operation. 1: render only if undeleted or attributed. 2: render as insert operation (if unattributed and deleted, render as delete). 3: fresh content deleted in the same transaction, marked {@link AttributedContent#fresh} — render as insert where attributed (it must insert even in a `retainDeletes` render: the consuming state has never seen it), as *nothing* where unattributed (invisible; a delete op would misapply).
    */
   readContent (_contents, _client, _clock, _deleted, _content, _shouldRender) {
     error.methodUnimplemented()
@@ -75,36 +110,24 @@ export class AbstractRenderer extends ObservableV2 {
 export const $renderer = AbstractRenderer.prototype.$type = s.$type('y:r', AbstractRenderer)
 
 /**
- * The default renderer. Renders content as-is, without looking up any attributions.
+ * The absence of a renderer: content renders as-is via the generic fast path, without any
+ * attribution lookups.
  *
- * @implements AbstractRenderer
- *
- * @extends {ObservableV2<{change:(idset:IdSet,origin:any,local:boolean)=>void}>}
+ * @deprecated pass `null` (or omit the renderer option) instead — kept as an alias for downstream
+ * code that referenced the former base-renderer object.
+ * @type {null}
  */
-export class BaseRenderer extends ObservableV2 {
-  get $type () { return $renderer }
+export const baseRenderer = null
 
-  /**
-   * @param {Array<AttributedContent<any>>} contents - where to write the result
-   * @param {number} _client
-   * @param {number} clock
-   * @param {boolean} deleted
-   * @param {AbstractContent} content
-   * @param {0|1|2} shouldRender - whether this should render or just result in a `retain` operation
-   */
-  readContent (contents, _client, clock, deleted, content, shouldRender) {
-    if (!deleted || shouldRender) {
-      contents.push(new AttributedContent(content, clock, deleted, null, shouldRender))
-    }
-  }
-
-  /**
-   * @param {Item} item
-   * @return {number}
-   */
-  contentLength (item) {
-    return (item.deleted || !item.content.isCountable()) ? 0 : item.length
-  }
-}
-
-export const baseRenderer = new BaseRenderer()
+/**
+ * Rendered length of `item` under `renderer`: the generic rule — alive countable content renders
+ * at full length, everything else at length `0` — unless the renderer claims the item.
+ *
+ * @param {AbstractRenderer?} renderer
+ * @param {Item} item
+ * @return {number}
+ */
+export const rendererContentLength = (renderer, item) =>
+  renderer !== null && renderer.hasItem(item)
+    ? renderer.contentLength(item)
+    : ((item.deleted || !item.content.isCountable()) ? 0 : item.length)

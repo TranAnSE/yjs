@@ -2,7 +2,7 @@ import { ObservableV2 } from 'lib0/observable'
 import * as encoding from 'lib0/encoding'
 
 import { getItemCleanStart } from './transaction-helpers.js'
-import { diffIdSet, createInsertSetFromStructStore, createDeleteSetFromStructStore, insertIntoIdSet, mergeIdSets, intersectSets, createIdSet, writeIdSet, createIdMapFromIdSet, insertIntoIdMap, diffIdMap, createIdMap, mergeIdMaps, intersectMaps, createMaybeAttrRange, createContentAttribute } from './ids.js'
+import { diffIdSet, createInsertSetFromStructStore, createDeleteSetFromStructStore, insertIntoIdSet, mergeIdSets, intersectSets, createIdSet, createIdSetFromIdMap, writeIdSet, createIdMapFromIdSet, insertIntoIdMap, diffIdMap, createIdMap, mergeIdMaps, intersectMaps, createMaybeAttrRange, createContentAttribute } from './ids.js'
 import { ContentDeleted, ContentFormat } from '../structs/Item.js'
 import { createID } from './ID.js'
 import { writeStructsFromIdSet } from './encoding-helpers.js'
@@ -13,7 +13,7 @@ import { UndoManager, StackItem } from './UndoManager.js'
 
 import { $renderer, AttributedContent } from './renderer-helpers.js'
 
-export { baseRenderer, BaseRenderer, AbstractRenderer, $renderer } from './renderer-helpers.js'
+export { baseRenderer, AbstractRenderer, rendererContentLength, $renderer } from './renderer-helpers.js'
 
 /**
  * @implements AbstractRenderer
@@ -29,9 +29,23 @@ export class TwosetRenderer extends ObservableV2 {
     super()
     this.inserts = inserts
     this.deletes = deletes
+    /**
+     * Raw coverage of the two maps — `readContent` remains authoritative for what actually
+     * renders. See {@link AbstractRenderer#attributed}.
+     * @type {IdSet}
+     */
+    this.attributed = mergeIdSets([createIdSetFromIdMap(inserts), createIdSetFromIdMap(deletes)])
   }
 
   get $type () { return $renderer }
+
+  /**
+   * @param {Item} item
+   * @return {boolean}
+   */
+  hasItem (item) {
+    return this.attributed.intersects(item.id.client, item.id.clock, item.length)
+  }
 
   /**
    * @param {Array<AttributedContent<any>>} contents - where to write the result
@@ -39,7 +53,7 @@ export class TwosetRenderer extends ObservableV2 {
    * @param {number} clock
    * @param {boolean} deleted
    * @param {AbstractContent} content
-   * @param {0|1|2} shouldRender - whether this should render or just result in a `retain` operation
+   * @param {0|1|2|3} shouldRender - whether this should render or just result in a `retain` operation (see AbstractRenderer#readContent)
    */
   readContent (contents, client, clock, deleted, content, shouldRender) {
     const slice = (deleted ? this.deletes : this.inserts).slice(client, clock, content.getLength())
@@ -49,7 +63,8 @@ export class TwosetRenderer extends ObservableV2 {
       if (s.len < c.getLength()) {
         content = c.splice(s.len)
       }
-      if (!deleted || s.attrs != null || shouldRender) {
+      // see DiffRenderer#readContent: mode 3 renders unattributed deleted content as nothing
+      if (!deleted || s.attrs != null || (shouldRender !== 0 && shouldRender !== 3)) {
         contents.push(new AttributedContent(c, s.clock, deleted, s.attrs, shouldRender))
       }
     })
@@ -214,8 +229,17 @@ export class DiffRenderer extends ObservableV2 {
     const _prevDocInserts = createInsertSetFromStructStore(prevDoc.store, false) // unmaintained
     const nextDocDeletes = createDeleteSetFromStructStore(nextDoc.store) // maintained
     const prevDocDeletes = createDeleteSetFromStructStore(prevDoc.store) // maintained
-    this.inserts = extractAttributions(attrs?.inserts, diffIdSet(_nextDocInserts, _prevDocInserts))
-    this.deletes = extractAttributions(attrs?.deletes, diffIdSet(nextDocDeletes, prevDocDeletes))
+    const insertDiff = diffIdSet(_nextDocInserts, _prevDocInserts)
+    const deleteDiff = diffIdSet(nextDocDeletes, prevDocDeletes)
+    this.inserts = extractAttributions(attrs?.inserts, insertDiff)
+    this.deletes = extractAttributions(attrs?.deletes, deleteDiff)
+    /**
+     * Raw coverage of `inserts` ∪ `deletes`, maintained alongside them. Over-approximates the
+     * actually-rendered set (e.g. it keeps suggested-inserts that were deleted later) —
+     * `readContent` remains authoritative. See {@link AbstractRenderer#attributed}.
+     * @type {IdSet}
+     */
+    this.attributed = mergeIdSets([insertDiff, deleteDiff])
     this._prevDoc = prevDoc
     this._prevDocStore = prevDoc.store
     this._nextDoc = nextDoc
@@ -227,6 +251,8 @@ export class DiffRenderer extends ObservableV2 {
       // update deletes
       const diffDeletes = diffIdSet(diffIdSet(tr.deleteSet, prevDocDeletes), this.inserts)
       insertIntoIdMap(this.deletes, extractAttributions(attrs?.deletes, diffDeletes))
+      insertIntoIdSet(this.attributed, diffInserts)
+      insertIntoIdSet(this.attributed, diffDeletes)
       // @todo fire update ranges on `diffInserts` and `diffDeletes`
     })
     this._prevBOH = prevDoc.on('beforeObserverCalls', tr => {
@@ -247,6 +273,14 @@ export class DiffRenderer extends ObservableV2 {
       } else {
         this.deletes = diffIdMap(this.deletes, tr.deleteSet)
       }
+      // evict the accepted/rejected ranges from the coverage set, then re-add whatever the maps
+      // still claim: `tr.insertSet` only evicts insert-attributions and `tr.deleteSet` only evicts
+      // delete-attributions, but a single range can be covered by both maps (e.g. an accepted
+      // insert with a still-pending delete suggestion on the same ids must stay attributed).
+      const evicted = mergeIdSets([tr.insertSet, tr.deleteSet])
+      this.attributed = diffIdSet(this.attributed, evicted)
+      insertIntoIdSet(this.attributed, intersectSets(evicted, this.inserts))
+      insertIntoIdSet(this.attributed, intersectSets(evicted, this.deletes))
       // fire event of "changed" attributions. exclude items that were added & deleted in the same
       // transaction
       this.emit('change', [diffIdSet(mergeIdSets([tr.insertSet, tr.deleteSet]), intersectSets(tr.insertSet, tr.deleteSet)), tr.origin, tr.local])
@@ -291,6 +325,14 @@ export class DiffRenderer extends ObservableV2 {
   }
 
   get $type () { return $renderer }
+
+  /**
+   * @param {Item} item
+   * @return {boolean}
+   */
+  hasItem (item) {
+    return this.attributed.intersects(item.id.client, item.id.clock, item.length)
+  }
 
   destroy () {
     super.destroy()
@@ -353,7 +395,7 @@ export class DiffRenderer extends ObservableV2 {
    * @param {number} clock
    * @param {boolean} deleted
    * @param {AbstractContent} _content
-   * @param {0|1|2} shouldRender - whether this should render or just result in a `retain` operation
+   * @param {0|1|2|3} shouldRender - whether this should render or just result in a `retain` operation (see AbstractRenderer#readContent)
    */
   readContent (contents, client, clock, deleted, _content, shouldRender) {
     const slice = (deleted ? this.deletes : this.inserts).slice(client, clock, _content.getLength())
@@ -383,7 +425,11 @@ export class DiffRenderer extends ObservableV2 {
         s.len = clen
       }
       content = s.len < clen ? c.splice(s.len) : null
-      if (shouldRender || !deleted || s.attrs != null) {
+      // mode 3 (fresh content deleted in the same transaction) renders as an insert only where
+      // the renderer attributes it — unattributed deleted content is invisible and renders as
+      // *nothing* (there is nothing to insert, and a `delete` op would misapply: the consuming
+      // state has never seen this content)
+      if (!deleted || s.attrs != null || (shouldRender !== 0 && shouldRender !== 3)) {
         contents.push(new AttributedContent(c, s.clock, deleted, s.attrs, shouldRender))
       }
     }
@@ -443,9 +489,27 @@ export class SnapshotRenderer extends ObservableV2 {
       inserts.add(client, prevClock, clock - prevClock, [createContentAttribute('change', '')]) // content is rendered as "inserted"
     })
     this.attrs = mergeIdMaps([diffIdMap(inserts, prevSnapshot.ds), deletes])
+    /**
+     * Coverage of `attrs` (everything up to `nextSnapshot`). Content *after* the snapshot must be
+     * hidden rather than rendered normally, which a finite set cannot express — `hasItem`
+     * additionally claims all future content. See {@link AbstractRenderer#attributed}.
+     * @type {IdSet}
+     */
+    this.attributed = createIdSetFromIdMap(this.attrs)
   }
 
   get $type () { return $renderer }
+
+  /**
+   * @param {Item} item
+   * @return {boolean}
+   */
+  hasItem (item) {
+    // claim future content (item ids at/after the snapshot's state vector, including clients the
+    // snapshot has never seen) — `readContent` hides it, the generic path would render it
+    return (this.nextSnapshot.sv.get(item.id.client) ?? 0) < item.id.clock + item.length ||
+      this.attributed.intersects(item.id.client, item.id.clock, item.length)
+  }
 
   /**
    * @param {Array<AttributedContent<any>>} contents - where to write the result
@@ -453,7 +517,7 @@ export class SnapshotRenderer extends ObservableV2 {
    * @param {number} clock
    * @param {boolean} _deleted
    * @param {AbstractContent} content
-   * @param {0|1|2} shouldRender - whether this should render or just result in a `retain` operation
+   * @param {0|1|2|3} shouldRender - whether this should render or just result in a `retain` operation (see AbstractRenderer#readContent)
    */
   readContent (contents, client, clock, _deleted, content, shouldRender) {
     if ((this.nextSnapshot.sv.get(client) ?? 0) <= clock) return // future item that should not be displayed

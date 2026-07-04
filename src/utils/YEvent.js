@@ -1,8 +1,7 @@
 import * as map from 'lib0/map'
 import * as set from 'lib0/set'
 
-import { diffIdSet, mergeIdSets } from './ids.js'
-import { baseRenderer } from './renderer-helpers.js'
+import { diffIdSet, intersectSets, mergeIdSets } from './ids.js'
 import { createAbsolutePositionFromRelativePosition, createRelativePosition } from './RelativePosition.js'
 
 /**
@@ -86,14 +85,26 @@ export class YEvent {
   /**
    * @template {boolean} [Deep=false]
    * @param {object} [opts]
-   * @param {AbstractRenderer} [opts.renderer] - renders the content (with attributions); defaults to the target type's active renderer (see {@link YType#useRenderer}), i.e. `baseRenderer` unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to the target type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
    * @param {Deep} [opts.deep]
    * @return {Deep extends true ? Delta<DConf> : Delta<import('../ytype.js').DeltaConfDeltaToYType<DConf>>} The Delta representation of this type.
    *
    * @public
    */
   getDelta ({ renderer = this.target._renderer, deep } = {}) {
-    const itemsToRender = mergeIdSets([diffIdSet(this.transaction.insertSet, this.transaction.deleteSet), diffIdSet(this.transaction.deleteSet, this.transaction.insertSet)])
+    const insertSet = this.transaction.insertSet
+    const deleteSet = this.transaction.deleteSet
+    // content that was both inserted AND deleted by this transaction is normally invisible — but a
+    // renderer may still render it (e.g. remote content integrated under a suggestion-deleted
+    // parent is auto-deleted yet rendered with a delete attribution). Render
+    // `(I ∪ D) − ((I ∩ D) − renderer.attributed)`: the symmetric difference plus the attributed
+    // part of the intersection.
+    const both = intersectSets(insertSet, deleteSet)
+    const itemsToRender = mergeIdSets(
+      (both.isEmpty() || renderer === null)
+        ? [diffIdSet(insertSet, deleteSet), diffIdSet(deleteSet, insertSet)]
+        : [diffIdSet(insertSet, deleteSet), diffIdSet(deleteSet, insertSet), intersectSets(both, renderer.attributed)]
+    )
     /**
      * @todo this should be done only one in the transaction step
      *
@@ -120,7 +131,7 @@ export class YEvent {
       }
       modified = dchanged
     }
-    return /** @type {any} */ (this.target.toDelta({ renderer, itemsToRender, retainDeletes: true, deletedItems: this.transaction.deleteSet, deep: !!deep, modified }))
+    return /** @type {any} */ (this.target.toDelta({ renderer, itemsToRender, retainDeletes: true, insertedItems: insertSet, deletedItems: deleteSet, deep: !!deep, modified }))
   }
 
   /**
@@ -158,13 +169,13 @@ export class YEvent {
  *
  * @param {YType} parent
  * @param {YType} child target
- * @param {AbstractRenderer} renderer
+ * @param {AbstractRenderer?} renderer
  * @return {Array<string|number>} Path to the target
  *
  * @private
  * @function
  */
-export const getPathTo = (parent, child, renderer = baseRenderer) => {
+export const getPathTo = (parent, child, renderer = null) => {
   const path = []
   const doc = /** @type {Doc} */ (parent.doc)
   while (child._item !== null && child !== parent) {
