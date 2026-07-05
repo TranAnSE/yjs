@@ -1575,3 +1575,334 @@ export const testRdtBaseInsertIntoOverlappingFormatRangeCacheDrift = () => {
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base insert into the overlapping format range')
 }
+
+/**
+ * Currently-failing sibling of the class above, found by grid-enumerating the repro skeleton
+ * (192 same-class combos in the suggested-insert pass, 496 more with formatted base inserts;
+ * pre-existing — before `isRangeEndClear` it drifted one op earlier, at the base format op):
+ * with TWO overlapping suggested format keys the ambient attributed format context never
+ * empties, so when a base-doc format arrives on one of the keys, no reset — neither the fresh
+ * render's `useAttribution(null)` path nor `isRangeEndClear`, which deliberately mirrors it —
+ * closes that key's governance. The stale `{format: {strong: []}}` then surfaces in the cache
+ * on the next change render that walks the span: a suggested insert *inside* the em range
+ * (an insert past it renders clean):
+ *
+ *   cached: a(em+strong, both attributed) | x({insert:[]}) | b(…) | cd({format:{strong:[]}} ← STALE)
+ *   fresh : a(em+strong, both attributed) | x({insert:[]}) | b(…) | cd
+ *
+ * The marker integration order is load-bearing: it reproduces with base.clientID > sugg.clientID
+ * and renders clean with the order flipped. Closing it needs real multi-key closure of attributed
+ * format contexts (per-key, not only-key) in both the fresh and the change render walks.
+ */
+export const testRdtSuggestedInsertUnderTwoKeySuggestedFormatsCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 1
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 0
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('abcd').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // two overlapping suggested formats → a two-key attributed format context over 'ab'
+  st.applyDelta(delta.create().retain(2, { em: {} }).done())
+  st.applyDelta(delta.create().retain(4, { strong: {} }).done())
+  // base strong over 'ab' — same key/value as the suggestion; the cache is still clean here
+  bt.applyDelta(delta.create().retain(2, { strong: {} }).done())
+  // suggested insert inside the em range → the change render re-stamps the trailing spans and
+  // flushes the stale strong governance into the cache
+  st.applyDelta(delta.create().retain(1).insert('x').done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a suggested insert under a two-key suggested format context')
+}
+
+/**
+ * Currently-failing formatted-base-insert sibling of the two-key class above (grid class B,
+ * 496 combos in the formatted-base-insert fuzzing pass; pre-existing): under a two-key
+ * suggested format context (em over 'ab', strong over 'a'), a base-doc em arrives on 'a'
+ * only — strictly undercovering the suggested em range — so the em governance over the
+ * trailing 'b' stays attributed-stale in the cache. A base insert *formatted with the other
+ * suggested key* ({strong:{}}) before the context then flushes the stale em into the cache:
+ *
+ *   cached: x(strong+em, attributed) | a(em, attributed) | b({format:{em:[]}} ← STALE)
+ *   fresh : x(strong+em, attributed) | a(em, attributed) | b
+ *
+ * Every knob is load-bearing: a plain base insert, an em- or third-key-formatted insert,
+ * inserting at position 1 or 2, base em covering the full suggested em range, suggested
+ * strong covering the full em range, or dropping any of the three format ops all render
+ * clean — so this does not collapse into the plain-insert siblings above. Like the sibling,
+ * it needs base.clientID > sugg.clientID and renders clean with the order flipped.
+ */
+export const testRdtFormattedBaseInsertUnderTwoKeySuggestedFormatsCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 1
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 0
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('ab').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // two overlapping suggested formats → a two-key attributed format context, em past strong
+  st.applyDelta(delta.create().retain(2, { em: {} }).done())
+  st.applyDelta(delta.create().retain(1, { strong: {} }).done())
+  // base em on 'a' only — same key/value as the suggestion but undercovering its range, so
+  // the em governance over the trailing 'b' stays stale; the cache is still clean here
+  bt.applyDelta(delta.create().retain(1, { em: {} }).done())
+  // base insert formatted with the OTHER suggested key, before the context → the change
+  // render re-stamps the trailing spans and flushes the stale em governance into the cache
+  bt.applyDelta(delta.create().insert('x', { strong: {} }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a formatted base insert under a two-key suggested format context')
+}
+
+/**
+ * Currently-failing FORMAT-VALUE divergence (pre-existing; minimized from fuzz-core seeds 711
+ * and 4935, which both collapse to this one 4-op skeleton — the two seeds are mirror
+ * directions of it, `em:{}` leaking format IN vs `em:null` leaking format OUT):
+ * when a base-doc format op's range END lands strictly *inside* a same-key suggested-format
+ * span, the change render stamps the base op's format one char PAST its range end. The cache
+ * then disagrees with a fresh deep render about the EFFECTIVE FORMAT of that boundary char —
+ * not merely its attribution (no attribution differs; none is even present):
+ *
+ *   cached: abxx(em)                 ← trailing 'x' wrongly formatted
+ *   fresh : abx(em) | x(no format)
+ *
+ * Every ingredient is load-bearing: the pre-existing em on 'b', the TWO appended chars (with a
+ * single 'x' there is no boundary char inside the suggested span), the suggestion straddling
+ * the base range end (covering only one of the two 'x's renders clean), the base op ending
+ * strictly inside the span (retain(4) renders clean), same key on both sides (a `strong`
+ * suggestion renders clean), and the order suggestion-before-base-format (flipped renders
+ * clean). Reproduces identically with both clientID orders (0/1 and 1/0).
+ */
+export const testRdtBaseFormatEndingInsideSuggestedFormatRangeFormatValueCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('ab').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // pre-existing base em on 'b'
+  bt.applyDelta(delta.create().retain(1).retain(1, { em: {} }).done())
+  // plain base append after the em run
+  bt.applyDelta(delta.create().retain(2).insert('xx').done())
+  // suggested em over the appended 'xx' — same key as the base format below
+  st.applyDelta(delta.create().retain(2).retain(2, { em: {} }).done())
+  // base em over 'abx' — the range end lands strictly inside the suggested span; the cache
+  // bleeds the em onto the trailing 'x' as its *format* (fresh leaves it unformatted)
+  bt.applyDelta(delta.create().retain(3, { em: {} }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base format ending inside a same-key suggested format range')
+}
+
+/**
+ * Currently-failing MISSING-attribution class (inverse direction of the stale classes above —
+ * there the cache keeps an attribution the fresh render has dropped; here the cache DROPS one
+ * the fresh render keeps). Minimized from fuzz-core seed 2 (drift at opIndex 24, 25 ops → 3):
+ * a *suggested format removal* (key → null) of a base-doc format is applied to the maintained
+ * cache without the attributed-removal marker that the fresh render produces:
+ *
+ *   cached: a(em) | b                      ← removal applied, attribution LOST
+ *   fresh : a(em) | b({format: {em: []}})  ← attributed suggested removal
+ *
+ * Load-bearing shape: the base format must extend *beyond* the removed char (em over 'ab',
+ * removal on 'b' only — base-formatting 'b' alone renders clean), and the suggestion must
+ * first *override* the base format value on that char with a different value ({x:1} vs {};
+ * without the override, or with an equal-value override, or with override+removal spanning
+ * the whole base range, the removal renders clean). Both clientID orders reproduce; no
+ * accept/reject involved (deterministic, 100/100 without seeding Math.random).
+ */
+export const testRdtSuggestedRemovalOfOverriddenBaseFormatCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('ab').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // base em over all of 'ab' — must extend beyond the char the suggestion touches
+  bt.applyDelta(delta.create().retain(2, { em: {} }).done())
+  // suggested override of the base format value on 'b' (different value is load-bearing)
+  st.applyDelta(delta.create().retain(1).retain(1, { em: { x: 1 } }).done())
+  // suggested removal of em on 'b' → cache applies the removal but loses the attribution
+  st.applyDelta(delta.create().retain(1).retain(1, { em: null }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a suggested removal of an overridden base format')
+}
+
+/**
+ * Adjudicated core of lifecycle-fuzz class P5 ("post-clearCache re-drift", seeds 657/1131/2401):
+ * clearCache is NOT load-bearing — all three seeds drift identically with the clearCache op
+ * deleted, and a FRESH doc/renderer pair built via encodeStateAsUpdate/applyUpdate to the
+ * pre-clearCache state drifts identically on the same final op. The class collapses into the
+ * core no-lifecycle overlapping same-key format drift family (missing-attribution direction):
+ * a suggested unformat of a base-doc format, staged left-to-right in two steps, loses the
+ * second step's unformat attribution in the maintained cache:
+ *
+ *   cached: a({format:{em:[]}}) | b(no attribution ← MISSING)
+ *   fresh : ab({format:{em:[]}})
+ *
+ * Load-bearing: the two-step left-to-right staging (a single merged retain(2,{em:null}) renders
+ * clean, and unformatting 'b' before 'a' renders clean) and the base format arriving as ONE op
+ * over both chars (two 1-char base formats + a merged suggested unformat renders clean).
+ * Key (em/strong), base format value ({} vs {x:1}) and the clientID order are NOT load-bearing
+ * (drifts identically with base=0/sugg=1 and base=1/sugg=0). With a 3-char doc the same ops
+ * additionally leave a STALE {format:{em:[]}} on the still-formatted trailing char, i.e. both
+ * catalogued drift directions come from this walk defect.
+ */
+export const testRdtStagedSuggestedUnformatOfBaseFormatCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('ab').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // base em over all of 'ab' — in suggestion mode a base-doc format is not itself a suggestion
+  bt.applyDelta(delta.create().retain(2, { em: {} }).done())
+  // suggested unformat of the same key, staged left-to-right: first 'a' — the cache is still
+  // clean here, 'a' carries {format:{em:[]}}
+  st.applyDelta(delta.create().retain(1, { em: null }).done())
+  // ... then 'b' — the second step drops the {format:{em:[]}} attribution for 'b' from the
+  // cache while the fresh render keeps it
+  st.applyDelta(delta.create().retain(1).retain(1, { em: null }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a staged suggested unformat of a base format')
+}
+
+/**
+ * Currently-failing repro (lifecycle-fuzz class P2, 23/3000 seeds; minimized from seed 259's
+ * 9 ops to 3): ACCEPT-triggered cache drift — every step before the accept is consistent, and
+ * `acceptAllChanges()` itself corrupts the maintained `.delta`. Shape: a committed `strong` run
+ * ('a', present since the very first render) with a plain char ('b') right after it; a suggested
+ * `strong` on 'b' with the SAME key AND the SAME value as the committed run; accept-all. The
+ * accept commits the suggestion to base, and a fresh deep render shows one fully-committed
+ * unattributed run — but the accept's change render never clears the suggestion's format
+ * attribution on 'b', leaving the stale `{format:{strong:[]}}` in the cache forever:
+ *
+ *   cached: a(strong) | b(strong, {format:{strong:[]}} ← STALE)
+ *   fresh : ab(strong)
+ *
+ * Everything is load-bearing: same key (strong/em → clean), same value ({} vs {x:1} or null →
+ * clean), adjacency (a gap between the runs → clean), and order (committed run must precede the
+ * suggested char; suggesting on the char *before* the run, or on the run itself, renders clean).
+ * Both clientID orders reproduce. Related but distinct from
+ * testRdtAcceptingNodeInsertCacheDrift (that class leaks `{insert:[]}` into nested node content;
+ * this one leaks a `format` attribution on plain text, with a clean pre-accept state).
+ */
+export const testRdtAcceptAllOfSameValueSuggestedFormatCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  // committed strong on 'a', plain 'b' — present since the very first render
+  bt.applyDelta(delta.create().insert('a', { strong: {} }).insert('b').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // suggested strong on the adjacent 'b' — same key AND same value as the committed run
+  st.applyDelta(delta.create().retain(1).retain(1, { strong: {} }).done())
+  // the suggestion itself renders consistently; the drift is accept-triggered
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'suggested format itself is consistent')
+  renderer.acceptAllChanges()
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after accepting a same-value suggested format extension')
+}
+
+/**
+ * Currently-failing repro of the documented reject-side provenance residual (pre-existing;
+ * lifecycle-fuzzing class P1, 45 seeds; minimized from the 9-op seed-132 representative to
+ * 4 ops): a suggested strong on 'a' under a base strong over all of 'ab' — same key, with the
+ * base range extending strictly *past* the suggested span — then rejectAllChanges. The reject
+ * clears the suggestion, but the change render leaves the trailing 'b' still carrying the
+ * suggested-format attribution in the cache; the fresh render shows it unattributed:
+ *
+ *   cached: a(strong) | b(strong, {format:{strong:[]}} ← STALE)
+ *   fresh : ab(strong)
+ *
+ * Everything here is load-bearing: without the suggested format, without the base format, with
+ * a different suggested key (em), with the base range ending where the suggested span ends
+ * (full overlap), or with the sugg span at the end of the base range, it renders clean. The
+ * pre-reject cache is consistent — the residual appears only at the reject. The marker
+ * integration order is load-bearing in the opposite direction of the two-key siblings above:
+ * it reproduces with base.clientID < sugg.clientID and renders clean flipped. The reject flow
+ * does not echo structs back here (both clientIDs survive unreassigned), so the repro is
+ * Math.random-free: 100/100 identical failing runs without seeding.
+ */
+export const testRdtRejectAllOverlappingSameKeyFormatProvenanceResidual = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('ab').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // suggested strong on 'a'
+  st.applyDelta(delta.create().retain(1, { strong: {} }).done())
+  // base strong over all of 'ab' — same key, extending strictly past the suggested span
+  bt.applyDelta(delta.create().retain(2, { strong: {} }).done())
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'consistent before the reject')
+  // reject the suggestion → the trailing 'b' keeps the stale suggested-format attribution
+  renderer.rejectAllChanges()
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after rejecting overlapping same-key formats')
+}
