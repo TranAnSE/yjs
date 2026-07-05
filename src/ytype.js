@@ -1286,6 +1286,16 @@ export class YType extends ObservableV2 {
               const formattingAttribution = object.assign({}, d.usedAttribution)
               const changedAttributedFormats = /** @type {{ [key: string]: Array<any>|null }} */ (formattingAttribution.format = object.assign({}, formattingAttribution.format ?? {}))
               const sameAsPreviousAttributions = equalFormats(previousUnattributedFormats[key], currentFormats[key] ?? null)
+              // An *unattributed* marker rendered by this change (e.g. a fresh base-doc marker)
+              // that closes an open attributed same-key range by restoring the previous
+              // unattributed value: the spans it governs must drop their stale attribution from
+              // the cache, exactly like the attributed range-end below. Mirrors the fresh render
+              // precisely: there, the reset only closes the ambient attribution when removing the
+              // key leaves the format context empty (the `useAttribution(null)` case below) —
+              // while another attributed key holds the context open, the removal happens on a
+              // copy that is never installed, so the key survives on the following spans and the
+              // change render must NOT clear it.
+              const isRangeEndClear = attribution == null && sameAsPreviousAttributions && renderContent && !c.deleted && itemsToRender != null && renderer !== null && object.hasProperty(previousUnattributedFormats, key) && object.every(changedAttributedFormats, (_v, k) => k === key)
               if (isDeletedFormatClear || (isAcceptedFormatClear && changedAttributedFormats[key] == null)) {
                 // uniformly emit the per-key clear — also for a marker that *ends* a formerly
                 // attributed range: the attributed render emits a trailing per-key `null` past
@@ -1319,7 +1329,7 @@ export class YType extends ObservableV2 {
                 // modeled as absence in `currentFormats`), just drop the key: a change render must
                 // not emit ops for unchanged ranges, and inserts must stay free of a spurious
                 // `{ format: { [key]: null } }`.
-                if (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true)) {
+                if (isRangeEndClear || (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true))) {
                   changedAttributedFormats[key] = null
                 } else {
                   delete changedAttributedFormats[key]
@@ -1333,7 +1343,7 @@ export class YType extends ObservableV2 {
               }
               if (object.isEmpty(changedAttributedFormats)) {
                 d.useAttribution(null)
-              } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear) {
+              } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || isRangeEndClear) {
                 const attributedAt = (c.deleted ? attribution?.deleteAt : attribution?.insertAt)
                 if (attributedAt != null) formattingAttribution.formatAt = attributedAt
                 d.useAttribution(formattingAttribution)

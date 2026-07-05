@@ -1528,3 +1528,50 @@ export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after the partial accept')
 }
+
+/**
+ * Currently-failing repro (minimized from y-prosemirror's `.dbg-fuzz.mjs` seed 54321, op #8;
+ * 14/25 fuzz seeds hit this class): a *base-doc* format arrives over an overlapping same-key
+ * *suggested* format, then a plain base-doc insert lands inside the formatted range (past the
+ * suggested span, with formatted content still following) — the change render emitted for the
+ * insert fails to close the attributed-format range, so the maintained `.delta` cache keeps a
+ * stale `{format: {strong: []}}` on the trailing content while a fresh render shows it
+ * committed:
+ *
+ *   cached: a(strong) | bx({format:{strong:[]}}) | c(strong, {format:{strong:[]}} ← STALE)
+ *   fresh : a(strong) | bx({format:{strong:[]}}) | c(strong)
+ *
+ * The drift appeared alongside the `usedFormats`/`useFormats()` rework (yjs 804e4d34 +
+ * lib0 7c1d44e) — it reproduces with the previous lib0 as well, so the yjs-side walk is
+ * sufficient to trigger it. It needs the insert strictly *inside* the base-format range and
+ * *after* the suggested span; inserting at the suggested span's boundary or at the range end
+ * renders correctly.
+ */
+export const testRdtBaseInsertIntoOverlappingFormatRangeCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('abc').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // suggested strong on 'a'
+  st.applyDelta(delta.create().retain(1, { strong: {} }).done())
+  // base strong over all of 'abc' — a base-doc format arriving under an overlapping same-key
+  // format suggestion
+  bt.applyDelta(delta.create().retain(3, { strong: {} }).done())
+  // plain base insert between 'b' and 'c' → the emitted change must end the attributed range,
+  // but leaves the trailing 'c' attributed in the cache
+  bt.applyDelta(delta.create().retain(2).insert('x').done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base insert into the overlapping format range')
+}
