@@ -1060,6 +1060,15 @@ export class YType extends ObservableV2 {
        */
       const previousFormats = {} // The value before changes
       /**
+       * Per-key provenance of `currentFormats`: `true` iff the marker currently governing the key
+       * opened a *pending attributed* range (the attributor-push branch below). Consulted only at
+       * deleted markers in change renders (`isDeletedFormatClear`) to distinguish a re-exposed
+       * committed enclosing value (must clear the stale attribution from the cache) from a
+       * re-exposed pending suggested value (must preserve it — the re-bolding case).
+       * @type {{ [key: string]: boolean }}
+       */
+      const currentFormatsAttributed = {}
+      /**
        * Attribution argument for a change-render retain whose content lost its *own* attribution.
        * `null` clears everything — correct in an attribution-free context — but inside an ambient
        * format attribution (installed via `useAttribution` by a surrounding format marker) the
@@ -1208,31 +1217,33 @@ export class YType extends ObservableV2 {
                 if (renderedFormatKeys === null) renderedFormatKeys = new Set()
                 renderedFormatKeys.add(key)
               }
+              // `previousFormats` tracks the value governing the current walk position in the
+              // *consuming cache state*, so the retain diff below stays a plain cache → new-state
+              // comparison. Contributors: markers deleted by this change in event renders (their
+              // value governed the cache until now; heal-rendered deletes are PRE-deleted markers
+              // whose removal the cache already rendered — they must not contribute), alive
+              // markers re-rendered by heal renders (`retainInserts` — their value was in the
+              // cache), and retained alive markers (the branch below). A gated update here is not
+              // enough: a marker deleted by the change whose value coincides with the walk's
+              // current value would silently drop out of the cache-reference tracking, and a later
+              // marker would be misread as a restore-to-previous, swallowing a needed format diff.
               if (c.deleted) {
-                // content was deleted, but is possibly attributed
-                if (!equalFormats(value, currFormatVal)) { // do nothing if nothing changed
-                  if (equalFormats(currFormatVal, previousFormats[key] ?? null) && changedFormats[key] !== undefined) {
-                    delete changedFormats[key]
-                  } else {
-                    changedFormats[key] = currFormatVal
-                  }
-                  // current formats doesn't change
-                  previousFormats[key] = value
-                }
+                if (itemsToRender !== null && !retainInserts) previousFormats[key] = value
               } else { // !c.deleted
-                // content was inserted, and is possibly attributed
-                if (equalFormats(value, currFormatVal)) {
-                  // item.delete(transaction)
-                } else if (equalFormats(value, previousFormats[key] ?? null)) {
-                  delete changedFormats[key]
-                } else {
-                  changedFormats[key] = value
-                }
+                if (retainInserts) previousFormats[key] = value
                 if (value == null) {
                   delete currentFormats[key]
                 } else {
                   currentFormats[key] = value
                 }
+                currentFormatsAttributed[key] = false
+              }
+              // the retain diff for following spans is exactly cache (previousFormats) → new
+              // state (currentFormats), recomputed per key at every rendered marker
+              if (equalFormats(currentFormats[key] ?? null, previousFormats[key] ?? null)) {
+                delete changedFormats[key]
+              } else {
+                changedFormats[key] = currentFormats[key] ?? null
               }
             } else if (retainContent && !c.deleted) {
               // fresh reference to currentFormats only
@@ -1249,6 +1260,7 @@ export class YType extends ObservableV2 {
               } else {
                 currentFormats[key] = value
               }
+              currentFormatsAttributed[key] = false
               delete changedFormats[key]
               previousFormats[key] = value
             }
@@ -1259,11 +1271,19 @@ export class YType extends ObservableV2 {
             // `{ format: { [key]: [] } }` the marker's insertion wrote to the cache. Emit an explicit
             // `null` leaf for the key (a context-wide `useAttribution(null)` cannot carry a per-key
             // clear). Conditions: only an attributing render (`renderer !== null`; without a
-            // renderer there are no attributions to clear), and only when the deletion actually *removes*
-            // the format — i.e. it reverts to no value (`currFormatVal == null`). If it reverts to a
-            // still-present surrounding value (e.g. deleting a `bold:null` marker re-exposes an
-            // enclosing attributed `bold:true`, as when re-bolding), the attribution is preserved.
-            const isDeletedFormatClear = attribution == null && renderer !== null && renderDelete && c.deleted && itemsToRender != null && currFormatVal == null && !equalFormats(value, currFormatVal)
+            // renderer there are no attributions to clear), and only when the deletion reverts to
+            // a value that is not itself governed by a pending suggestion: either no value at all
+            // (`currFormatVal == null`) or a *committed* enclosing value (provenance tracked in
+            // `currentFormatsAttributed` — e.g. an accept/reject deleting a marker re-exposes the
+            // enclosing committed `bold:true`, and the span's stale suggested-format attribution
+            // must be cleared). If it reverts to a still-pending *attributed* value (deleting a
+            // `bold:null` marker re-exposes an enclosing attributed `bold:true`, as when
+            // re-bolding), the attribution is preserved. Suppressed entirely while an attributed
+            // same-key range is open (`previousUnattributedFormats` has the key): there the fresh
+            // render skips this marker — its governance belongs to the still-open attributed
+            // range, whose ambient context re-stamps the correct attribution on the following
+            // retains — mirroring the identical guard on `isAcceptedFormatClear`.
+            const isDeletedFormatClear = attribution == null && renderer !== null && renderDelete && c.deleted && itemsToRender != null && (currFormatVal == null || currentFormatsAttributed[key] !== true) && !equalFormats(value, currFormatVal) && !object.hasProperty(previousUnattributedFormats, key)
             // The alive-marker analogue of `isDeletedFormatClear`: a format marker whose
             // *attribution* was removed while the marker survives — its suggestion was accepted
             // (the marker's id arrives via the renderer's `'change'` event). The original change
@@ -1336,6 +1356,11 @@ export class YType extends ObservableV2 {
                 }
                 delete previousUnattributedFormats[key]
               } else {
+                // an attributed marker opens pending governance for the key — a deleted attributed
+                // marker never writes `currentFormats`, hence the alive gate; an attributed marker
+                // that value-equals the previous unattributed value takes the reset branch above
+                // and correctly yields committed governance
+                if (!c.deleted) currentFormatsAttributed[key] = true
                 const by = changedAttributedFormats[key] = (changedAttributedFormats[key]?.slice() ?? [])
                 by.push(...((c.deleted ? attribution.delete : attribution.insert) ?? []))
                 const attributedAt = (c.deleted ? attribution.deleteAt : attribution.insertAt)
@@ -1343,7 +1368,13 @@ export class YType extends ObservableV2 {
               }
               if (object.isEmpty(changedAttributedFormats)) {
                 d.useAttribution(null)
-              } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || isRangeEndClear) {
+              } else if (attribution != null || isDeletedFormatClear || isAcceptedFormatClear || isRangeEndClear || (itemsToRender != null && object.every(changedAttributedFormats, v => v == null))) {
+                // the last disjunct: a change-render copy whose remaining leaves are ALL per-key
+                // null clears is the analogue of the fresh render's empty copy (fresh contexts
+                // never contain null leaves — they are produced only by the change-render-only
+                // predicates above) — install it, so an unattributed close marker's key deletion
+                // closes the governance while the pending cache clears still propagate; discarding
+                // it would re-merge the stale key into the cache from the surviving ambient
                 const attributedAt = (c.deleted ? attribution?.deleteAt : attribution?.insertAt)
                 if (attributedAt != null) formattingAttribution.formatAt = attributedAt
                 d.useAttribution(formattingAttribution)

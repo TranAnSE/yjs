@@ -1530,13 +1530,14 @@ export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
 }
 
 /**
- * Currently-failing repro (minimized from y-prosemirror's `.dbg-fuzz.mjs` seed 54321, op #8;
- * 14/25 fuzz seeds hit this class): a *base-doc* format arrives over an overlapping same-key
- * *suggested* format, then a plain base-doc insert lands inside the formatted range (past the
- * suggested span, with formatted content still following) — the change render emitted for the
- * insert fails to close the attributed-format range, so the maintained `.delta` cache keeps a
- * stale `{format: {strong: []}}` on the trailing content while a fresh render shows it
- * committed:
+ * Regression pin — fixed by `isRangeEndClear` in the ytype format walk (a rendered unattributed
+ * marker closing an attributed same-key range must emit the per-key attribution clear).
+ * Minimized from y-prosemirror's `.dbg-fuzz.mjs` seed 54321, op #8; 14/25 fuzz seeds hit this
+ * class: a *base-doc* format arrives over an overlapping same-key *suggested* format, then a
+ * plain base-doc insert lands inside the formatted range (past the suggested span, with
+ * formatted content still following) — the change render emitted for the insert failed to close
+ * the attributed-format range, so the maintained `.delta` cache kept a stale
+ * `{format: {strong: []}}` on the trailing content while a fresh render showed it committed:
  *
  *   cached: a(strong) | bx({format:{strong:[]}}) | c(strong, {format:{strong:[]}} ← STALE)
  *   fresh : a(strong) | bx({format:{strong:[]}}) | c(strong)
@@ -1577,22 +1578,21 @@ export const testRdtBaseInsertIntoOverlappingFormatRangeCacheDrift = () => {
 }
 
 /**
- * Currently-failing sibling of the class above, found by grid-enumerating the repro skeleton
- * (192 same-class combos in the suggested-insert pass, 496 more with formatted base inserts;
- * pre-existing — before `isRangeEndClear` it drifted one op earlier, at the base format op):
- * with TWO overlapping suggested format keys the ambient attributed format context never
- * empties, so when a base-doc format arrives on one of the keys, no reset — neither the fresh
- * render's `useAttribution(null)` path nor `isRangeEndClear`, which deliberately mirrors it —
- * closes that key's governance. The stale `{format: {strong: []}}` then surfaces in the cache
- * on the next change render that walks the span: a suggested insert *inside* the em range
- * (an insert past it renders clean):
+ * Regression pin — fixed by installing the all-null-leaves context copy in the attribution
+ * install gate. Sibling of the class above, found by grid-enumerating the repro skeleton
+ * (192 same-class combos in the suggested-insert pass, 496 more with formatted base inserts):
+ * with TWO overlapping suggested format keys, the change-render copy of the ambient attributed
+ * format context carries per-key null-clear leaves (which fresh contexts never hold), so the
+ * emptiness test at the install gate failed where the fresh walk reaches its empty-copy
+ * `useAttribution(null)` closure — an unattributed close marker's key deletion was discarded.
+ * The stale `{format: {strong: []}}` then surfaced in the cache on the next change render that
+ * walks the span: a suggested insert *inside* the em range (an insert past it renders clean):
  *
  *   cached: a(em+strong, both attributed) | x({insert:[]}) | b(…) | cd({format:{strong:[]}} ← STALE)
  *   fresh : a(em+strong, both attributed) | x({insert:[]}) | b(…) | cd
  *
  * The marker integration order is load-bearing: it reproduces with base.clientID > sugg.clientID
- * and renders clean with the order flipped. Closing it needs real multi-key closure of attributed
- * format contexts (per-key, not only-key) in both the fresh and the change render walks.
+ * and renders clean with the order flipped.
  */
 export const testRdtSuggestedInsertUnderTwoKeySuggestedFormatsCacheDrift = () => {
   const base = new Y.Doc({ gc: false })
@@ -1624,8 +1624,9 @@ export const testRdtSuggestedInsertUnderTwoKeySuggestedFormatsCacheDrift = () =>
 }
 
 /**
- * Currently-failing formatted-base-insert sibling of the two-key class above (grid class B,
- * 496 combos in the formatted-base-insert fuzzing pass; pre-existing): under a two-key
+ * Regression pin — fixed by the same install-gate change as the two-key class above (the
+ * all-null-leaves context copy must be installed). Formatted-base-insert sibling (grid class B,
+ * 496 combos in the formatted-base-insert fuzzing pass): under a two-key
  * suggested format context (em over 'ab', strong over 'a'), a base-doc em arrives on 'a'
  * only — strictly undercovering the suggested em range — so the em governance over the
  * trailing 'b' stays attributed-stale in the cache. A base insert *formatted with the other
@@ -1671,11 +1672,14 @@ export const testRdtFormattedBaseInsertUnderTwoKeySuggestedFormatsCacheDrift = (
 }
 
 /**
- * Currently-failing FORMAT-VALUE divergence (pre-existing; minimized from fuzz-core seeds 711
- * and 4935, which both collapse to this one 4-op skeleton — the two seeds are mirror
- * directions of it, `em:{}` leaking format IN vs `em:null` leaking format OUT):
+ * Regression pin — fixed by the `previousFormats` cache-reference rework in `# Update Formats`
+ * (a marker deleted by the change whose value equals the walk's current value dropped out of
+ * the tracking, so a later marker was misread as a restore-to-previous and the needed format
+ * diff was swallowed). FORMAT-VALUE divergence, minimized from fuzz-core seeds 711 and 4935,
+ * which both collapse to this one 4-op skeleton — the two seeds are mirror directions of it,
+ * `em:{}` leaking format IN vs `em:null` leaking format OUT:
  * when a base-doc format op's range END lands strictly *inside* a same-key suggested-format
- * span, the change render stamps the base op's format one char PAST its range end. The cache
+ * span, the change render stamped the base op's format one char PAST its range end. The cache
  * then disagrees with a fresh deep render about the EFFECTIVE FORMAT of that boundary char —
  * not merely its attribution (no attribution differs; none is even present):
  *
@@ -1720,10 +1724,13 @@ export const testRdtBaseFormatEndingInsideSuggestedFormatRangeFormatValueCacheDr
 }
 
 /**
- * Currently-failing MISSING-attribution class (inverse direction of the stale classes above —
- * there the cache keeps an attribution the fresh render has dropped; here the cache DROPS one
- * the fresh render keeps). Minimized from fuzz-core seed 2 (drift at opIndex 24, 25 ops → 3):
- * a *suggested format removal* (key → null) of a base-doc format is applied to the maintained
+ * Regression pin — fixed by the open-attributed-range guard on `isDeletedFormatClear`
+ * (`previousUnattributedFormats` has the key → the fresh render skips the deleted marker, so
+ * the change render must not emit a clear there; mirrors `isAcceptedFormatClear`'s guard).
+ * MISSING-attribution class (inverse direction of the stale classes above — there the cache
+ * keeps an attribution the fresh render has dropped; here the cache DROPPED one the fresh
+ * render keeps). Minimized from fuzz-core seed 2 (drift at opIndex 24, 25 ops → 3):
+ * a *suggested format removal* (key → null) of a base-doc format was applied to the maintained
  * cache without the attributed-removal marker that the fresh render produces:
  *
  *   cached: a(em) | b                      ← removal applied, attribution LOST
@@ -1764,13 +1771,15 @@ export const testRdtSuggestedRemovalOfOverriddenBaseFormatCacheDrift = () => {
 }
 
 /**
- * Adjudicated core of lifecycle-fuzz class P5 ("post-clearCache re-drift", seeds 657/1131/2401):
- * clearCache is NOT load-bearing — all three seeds drift identically with the clearCache op
- * deleted, and a FRESH doc/renderer pair built via encodeStateAsUpdate/applyUpdate to the
- * pre-clearCache state drifts identically on the same final op. The class collapses into the
- * core no-lifecycle overlapping same-key format drift family (missing-attribution direction):
- * a suggested unformat of a base-doc format, staged left-to-right in two steps, loses the
- * second step's unformat attribution in the maintained cache:
+ * Regression pin — fixed by the same open-attributed-range guard on `isDeletedFormatClear` as
+ * the class above. Adjudicated core of lifecycle-fuzz class P5 ("post-clearCache re-drift",
+ * seeds 657/1131/2401): clearCache is NOT load-bearing — all three seeds drift identically with
+ * the clearCache op deleted, and a FRESH doc/renderer pair built via
+ * encodeStateAsUpdate/applyUpdate to the pre-clearCache state drifts identically on the same
+ * final op. The class collapses into the core no-lifecycle overlapping same-key format drift
+ * family (missing-attribution direction): a suggested unformat of a base-doc format, staged
+ * left-to-right in two steps, lost the second step's unformat attribution in the maintained
+ * cache:
  *
  *   cached: a({format:{em:[]}}) | b(no attribution ← MISSING)
  *   fresh : ab({format:{em:[]}})
@@ -1813,9 +1822,13 @@ export const testRdtStagedSuggestedUnformatOfBaseFormatCacheDrift = () => {
 }
 
 /**
- * Currently-failing repro (lifecycle-fuzz class P2, 23/3000 seeds; minimized from seed 259's
- * 9 ops to 3): ACCEPT-triggered cache drift — every step before the accept is consistent, and
- * `acceptAllChanges()` itself corrupts the maintained `.delta`. Shape: a committed `strong` run
+ * Regression pin — fixed by provenance tracking (`currentFormatsAttributed`) widening
+ * `isDeletedFormatClear` to committed enclosing values: the accept deletes the committed run's
+ * close marker, whose removal re-exposes the committed `strong={}`, and the old
+ * `currFormatVal == null` guard blocked the needed clear. (Lifecycle-fuzz class P2, 23/3000
+ * seeds; minimized from seed 259's 9 ops to 3): ACCEPT-triggered cache drift — every step
+ * before the accept is consistent, and `acceptAllChanges()` itself corrupted the maintained
+ * `.delta`. Shape: a committed `strong` run
  * ('a', present since the very first render) with a plain char ('b') right after it; a suggested
  * `strong` on 'b' with the SAME key AND the SAME value as the committed run; accept-all. The
  * accept commits the suggestion to base, and a fresh deep render shows one fully-committed
@@ -1860,12 +1873,16 @@ export const testRdtAcceptAllOfSameValueSuggestedFormatCacheDrift = () => {
 }
 
 /**
- * Currently-failing repro of the documented reject-side provenance residual (pre-existing;
- * lifecycle-fuzzing class P1, 45 seeds; minimized from the 9-op seed-132 representative to
- * 4 ops): a suggested strong on 'a' under a base strong over all of 'ab' — same key, with the
- * base range extending strictly *past* the suggested span — then rejectAllChanges. The reject
- * clears the suggestion, but the change render leaves the trailing 'b' still carrying the
- * suggested-format attribution in the cache; the fresh render shows it unattributed:
+ * Regression pin — the long-documented reject-side provenance residual, fixed by the same
+ * `currentFormatsAttributed` provenance tracking as the accept class above (the failing render
+ * is the sugg-doc EVENT render — the reject's heal render receives an empty change set — and
+ * the deleted suggestion marker re-exposes the enclosing *committed* base strong, which the old
+ * `currFormatVal == null` guard could not see). Lifecycle-fuzzing class P1, 45 seeds; minimized
+ * from the 9-op seed-132 representative to 4 ops: a suggested strong on 'a' under a base strong
+ * over all of 'ab' — same key, with the base range extending strictly *past* the suggested
+ * span — then rejectAllChanges. The reject clears the suggestion, but the change render left
+ * the trailing 'b' still carrying the suggested-format attribution in the cache; the fresh
+ * render shows it unattributed:
  *
  *   cached: a(strong) | b(strong, {format:{strong:[]}} ← STALE)
  *   fresh : ab(strong)
