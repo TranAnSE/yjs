@@ -13,7 +13,6 @@ export const diffDocsToDelta = (v1, v2, { renderer = createDiffRenderer(v1, v2) 
   const deleteDiff = diffIdSet(createDeleteSetFromStructStore(v2.store), createDeleteSetFromStructStore(v1.store))
   // don't render items that have been inserted and then deleted
   const insertsOnly = diffIdSet(insertDiff, deleteDiff)
-  const deletesOnly = diffIdSet(deleteDiff, insertDiff)
   const itemsToRender = mergeIdSets([insertsOnly, deleteDiff])
   /**
    * @type {Map<YType, Set<string|null>>}
@@ -24,7 +23,7 @@ export const diffDocsToDelta = (v1, v2, { renderer = createDiffRenderer(v1, v2) 
     const typeConf = changedTypes.get(type)
     if (typeConf) {
       const shareDelta = type.toDelta({
-        renderer, itemsToRender, retainDeletes: true, deletedItems: deletesOnly, modified: changedTypes, deep: true
+        renderer, itemsToRender, retainDeletes: true, modified: changedTypes, deep: true
       })
       d.modifyAttr(typename, shareDelta)
     }

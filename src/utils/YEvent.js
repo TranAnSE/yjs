@@ -131,7 +131,7 @@ export class YEvent {
       }
       modified = dchanged
     }
-    return /** @type {any} */ (this.target.toDelta({ renderer, itemsToRender, retainDeletes: true, insertedItems: insertSet, deletedItems: deleteSet, deep: !!deep, modified }))
+    return /** @type {any} */ (this.target.toDelta({ renderer, itemsToRender, retainDeletes: true, insertedItems: insertSet, deep: !!deep, modified }))
   }
 
   /**

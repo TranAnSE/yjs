@@ -416,21 +416,38 @@ export const deleteText = (transaction, currPos, length) => {
        */
       const contents = []
       currPos.renderer.readContent(contents, item.id.client, item.id.clock, true, item.content, 0)
+      let splitClock = -1
       for (let i = 0; i < contents.length; i++) {
         const c = contents[i]
         if (c.content.isCountable() && c.attrs != null) {
+          if (length === 0) {
+            // the delete is exhausted but this item renders more content — split so the cursor
+            // advances only past the consumed part (mirrors formatText's renderer branch);
+            // otherwise every following op of the same delta targets too far right
+            splitClock = c.clock
+            break
+          }
           // deleting already deleted content. store that information in a meta property, but do
           // nothing
-          const contentLen = math.min(c.content.getLength(), length)
+          const pieceLen = c.content.getLength()
+          const contentLen = math.min(pieceLen, length)
           map.setIfUndefined(transaction.meta, 'attributedDeletes', createIdSet).add(item.id.client, c.clock, contentLen)
           length -= contentLen
+          if (contentLen < pieceLen) {
+            splitClock = c.clock + contentLen
+            break
+          }
         }
       }
-      const lastContent = contents.length > 0 ? contents[contents.length - 1] : null
-      const nextItemClock = item.id.clock + item.length
-      const nextContentClock = lastContent != null ? lastContent.clock + lastContent.content.getLength() : nextItemClock
-      if (nextContentClock < nextItemClock) {
-        getItemCleanStart(transaction, createID(item.id.client, nextContentClock))
+      if (splitClock >= 0) {
+        getItemCleanStart(transaction, createID(item.id.client, splitClock))
+      } else {
+        const lastContent = contents.length > 0 ? contents[contents.length - 1] : null
+        const nextItemClock = item.id.clock + item.length
+        const nextContentClock = lastContent != null ? lastContent.clock + lastContent.content.getLength() : nextItemClock
+        if (nextContentClock < nextItemClock) {
+          getItemCleanStart(transaction, createID(item.id.client, nextContentClock))
+        }
       }
     }
     currPos.forward()
@@ -999,7 +1016,6 @@ export class YType extends ObservableV2 {
    * @param {boolean} [opts.retainInserts] - if true, retain rendered inserts with attributions
    * @param {boolean} [opts.retainDeletes] - if true, retain rendered+attributed deletes only
    * @param {IdSet?} [opts.insertedItems] - ids inserted by the change being rendered; content that is both in `insertedItems` and deleted renders as a *fresh* insert even under `retainDeletes` (it was never part of the consuming state)
-   * @param {IdSet?} [opts.deletedItems] - used for computing prevItem in attributes
    * @param {Map<YType,Set<string|null>>|null} [opts.modified] - set of types that should be rendered as modified children
    * @param {Deep} [opts.deep] - render child types as delta
    * @return {Deep extends true ? delta.Delta<DConf> : delta.Delta<DeltaConfDeltaToYType<DConf>>} The Delta representation of this type.
@@ -1007,7 +1023,7 @@ export class YType extends ObservableV2 {
    * @public
    */
   toDelta (opts = {}) {
-    const { renderer = this._renderer, itemsToRender = null, retainInserts = false, retainDeletes = false, insertedItems = null, deletedItems = null, deep = false } = opts
+    const { renderer = this._renderer, itemsToRender = null, retainInserts = false, retainDeletes = false, insertedItems = null, deep = false } = opts
     const { modified = (deep && itemsToRender) ? computeModifiedFromItems(/** @type {Doc} */ (this.doc).store, itemsToRender) : null } = opts
     const renderAttrs = modified?.get(this) || null
     const renderChildren = modified == null || !modified.has(this) || /** @type {Set<string|null>} */ (modified.get(this)).has(null)
@@ -1017,7 +1033,7 @@ export class YType extends ObservableV2 {
     const d = /** @type {any} */ (delta.create(this.name))
     const optsAll = object.assign({}, opts, { renderer, modified })
     // opts has been re-computed - do not use opts after this point!
-    typeMapGetDelta(d, /** @type {any} */ (this), renderAttrs, renderer, deep, modified, deletedItems, itemsToRender, optsAll, optsAll)
+    typeMapGetDelta(d, /** @type {any} */ (this), renderAttrs, renderer, deep, modified, itemsToRender, optsAll, optsAll)
     if (renderChildren) {
       /**
        * @type {delta.Formats}
@@ -1105,20 +1121,20 @@ export class YType extends ObservableV2 {
                 // (`c.fresh` content is exempt from `retainDeletes`: it was inserted *and*
                 // deleted by this very change, so the consuming state holds nothing to retain —
                 // it renders as an insert below, carrying its attribution.)
-                d.usedFormats = changedFormats
+                d.useFormats(changedFormats)
                 usingChangedFormats = true
                 // change render: a retained item with no attribution means its attribution was
                 // removed → emit a clear rather than `{}` (skip). Present attribution merges.
                 d.retain(/** @type {ContentString} */ (c.content).str.length, undefined, attribution ?? clearedOwnAttribution())
               } else {
-                d.usedFormats = currentFormats
+                d.useFormats(currentFormats)
                 usingCurrentFormats = true
                 d.insert(/** @type {ContentString} */ (c.content).str, undefined, attribution)
               }
             } else if (renderDelete) {
               d.delete(c.content.getLength())
             } else if (retainContent) {
-              d.usedFormats = changedFormats
+              d.useFormats(changedFormats)
               usingChangedFormats = true
               d.retain(c.content.getLength())
             }
@@ -1132,7 +1148,7 @@ export class YType extends ObservableV2 {
             if (renderContent) {
               if (c.deleted ? (retainDeletes && !c.fresh) : retainInserts) {
                 // a retain expresses the format *diff* → use `changedFormats` (see ContentString)
-                d.usedFormats = changedFormats
+                d.useFormats(changedFormats)
                 usingChangedFormats = true
                 if (c.deleted && c.content.constructor === ContentType) {
                   // @todo use current transaction instead
@@ -1141,11 +1157,11 @@ export class YType extends ObservableV2 {
                   d.retain(c.content.getLength(), undefined, attribution ?? clearedOwnAttribution())
                 }
               } else if (deep && c.content.constructor === ContentType) {
-                d.usedFormats = currentFormats
+                d.useFormats(currentFormats)
                 usingCurrentFormats = true
                 d.insert([/** @type {any} */(c.content).type.toDelta(optsAll)], undefined, attribution)
               } else {
-                d.usedFormats = currentFormats
+                d.useFormats(currentFormats)
                 usingCurrentFormats = true
                 d.insert(c.content.getContent(), undefined, attribution)
               }
@@ -1156,7 +1172,7 @@ export class YType extends ObservableV2 {
                 // @todo use current transaction instead
                 d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll))
               } else {
-                d.usedFormats = changedFormats
+                d.useFormats(changedFormats)
                 usingChangedFormats = true
                 d.retain(1)
               }
@@ -1350,12 +1366,12 @@ export class YType extends ObservableV2 {
             if (retainInserts) {
               // attribution-overlay render (e.g. `toDelta({ renderer, retainInserts: true })`):
               // existing content is retained, clearing any formerly cached own-attribution
-              d.usedFormats = changedFormats
+              d.useFormats(changedFormats)
               usingChangedFormats = true
               d.retain(content.getLength(), undefined, clearedOwnAttribution())
             } else {
               // full render: a plain insert of the whole item
-              d.usedFormats = currentFormats
+              d.useFormats(currentFormats)
               usingCurrentFormats = true
               if (deep && content.constructor === ContentType) {
                 d.insert([/** @type {any} */(content).type.toDelta(optsAll)])
@@ -1382,17 +1398,17 @@ export class YType extends ObservableV2 {
                   // @todo use current transaction instead
                   d.modify(/** @type {ContentType} */ (content).type.toDelta(optsAll))
                 } else {
-                  d.usedFormats = changedFormats
+                  d.useFormats(changedFormats)
                   usingChangedFormats = true
                   // mirror the piece-wise op sizes of the renderer path (see the delete branch)
                   d.retain(content.constructor === ContentString ? idrange.len : 1)
                 }
               } else if (retainInserts) {
-                d.usedFormats = changedFormats
+                d.useFormats(changedFormats)
                 usingChangedFormats = true
                 d.retain(idrange.len, undefined, clearedOwnAttribution())
               } else {
-                d.usedFormats = currentFormats
+                d.useFormats(currentFormats)
                 usingCurrentFormats = true
                 if (deep && content.constructor === ContentType) {
                   d.insert([/** @type {any} */(content).type.toDelta(optsAll)])
@@ -1477,8 +1493,13 @@ export class YType extends ObservableV2 {
    * recognize — and skip — changes they produced themselves; see the lib0 `RDT` spec). Defaults to `null`.
    * @param {Object} [opts]
    * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
-   * @return {null} The lib0 `RDT` "fix" of this apply — always `null`: a `YType` accepts every valid
-   * delta as-is and never needs to self-correct.
+   * @return {delta.DeltaBuilder<any>?} The lib0 `RDT` "fix" of this apply — a change measured against the
+   * caller's expected state (`old.apply(d)`) that transforms it into the actual state, or `null`
+   * when `d` applied cleanly. A fix is produced when `d` (or a nested `modify`/`modifyAttr`)
+   * addresses a *deleted but rendered* node (e.g. a suggestion-deleted paragraph under a
+   * DiffRenderer): that part of the change is not applied to the document, and its inverse
+   * (`lib0/delta` `inverse` against the node's rendered state) is returned — the change is
+   * immediately reverted.
    *
    * @public
    */
@@ -1486,45 +1507,110 @@ export class YType extends ObservableV2 {
     if (d.isEmpty()) return null
     if (this.doc == null) {
       (this._prelim || (this._prelim = /** @type {any} */ (delta.create()))).apply(d)
-    } else if (this._item?.deleted !== true) {
-      // @todo this was moved here from ytext. Make this more generic
-      transact(this.doc, transaction => {
-        const currPos = new ItemTextListPosition(null, this._start, 0, new Map(), renderer)
-        for (const op of d.children) {
-          if (delta.$textOp.check(op)) {
-            insertContent(transaction, /** @type {any} */ (this), currPos, new ContentString(op.insert), op.format || {})
-          } else if (delta.$insertOp.check(op)) {
-            insertContentHelper(transaction, this, currPos, op.insert, op.format || {})
-          } else if (delta.$retainOp.check(op)) {
-            currPos.formatText(transaction, /** @type {any} */ (this), op.retain, op.format || {})
-          } else if (delta.$deleteOp.check(op)) {
-            deleteText(transaction, currPos, op.delete)
-          } else if (delta.$modifyOp.check(op)) {
-            let item = currPos.right
-            while (item != null && (item.deleted || !item.countable)) { item = item.next }
-            if (item == null || item.content.constructor !== ContentType) { error.unexpectedCase() }
-            /** @type {ContentType} */ (item.content).type.applyDelta(op.value, origin, { renderer })
-            currPos.formatText(transaction, /** @type {any} */ (this), 1, op.format || {})
+      return null
+    }
+    const titem = this._item
+    if (titem !== null && titem.deleted) {
+      if (rendererContentLength(renderer, titem) > 0) {
+        // deleted, but still rendered (e.g. a suggestion-deleted node): apply nothing — revert the
+        // whole change and return its inverse (against the rendered state the caller addressed)
+        const inv = delta.inverse(d, /** @type {any} */ (this.toDeltaDeep({ renderer })))
+        return inv.isEmpty() ? null : /** @type {any} */ (inv)
+      }
+      return null // invisible deleted type: the caller's view shows nothing here — silently drop
+    }
+    // @todo this was moved here from ytext. Make this more generic
+    return transact(this.doc, transaction => {
+      /**
+       * The accumulated fix. Its coordinates live in the caller's *expected* space, so they are
+       * tracked from `d`'s own ops (`expectedIndex`) — not `currPos.index`, which also counts
+       * content that a delete over attributed-deleted ranges leaves rendered.
+       *
+       * @type {delta.DeltaBuilder<any>?}
+       */
+      let fix = null
+      let fixLen = 0
+      let expectedIndex = 0
+      /**
+       * @param {delta.DeltaAny?} childFix
+       * @param {{ [k:string]: any }} [invFormat]
+       */
+      const appendModifyFix = (childFix, invFormat) => {
+        const f = fix ?? (fix = /** @type {any} */ (delta.create()))
+        expectedIndex > fixLen && f.retain(expectedIndex - fixLen)
+        f.modify(/** @type {any} */ (childFix ?? delta.create().done(false)), invFormat)
+        fixLen = expectedIndex + 1
+      }
+      const currPos = new ItemTextListPosition(null, this._start, 0, new Map(), renderer)
+      for (const op of d.children) {
+        if (delta.$textOp.check(op)) {
+          insertContent(transaction, /** @type {any} */ (this), currPos, new ContentString(op.insert), op.format || {})
+          expectedIndex += op.length
+        } else if (delta.$insertOp.check(op)) {
+          insertContentHelper(transaction, this, currPos, op.insert, op.format || {})
+          expectedIndex += op.length
+        } else if (delta.$retainOp.check(op)) {
+          currPos.formatText(transaction, /** @type {any} */ (this), op.retain, op.format || {})
+          expectedIndex += op.length
+        } else if (delta.$deleteOp.check(op)) {
+          deleteText(transaction, currPos, op.delete)
+        } else if (delta.$modifyOp.check(op)) {
+          let item = currPos.right
+          while (item !== null && rendererContentLength(renderer, item) === 0) { item = item.right }
+          if (item == null || item.content.constructor !== ContentType) { error.unexpectedCase() }
+          if (item.deleted) {
+            // deleted but rendered: revert instead of apply. Advance the cursor first (populating
+            // `currentFormats` with any markers up to the node) without applying `op.format`, then
+            // recurse — the child's deleted-guard applies nothing and returns the inverse.
+            currPos.formatText(transaction, /** @type {any} */ (this), 1, {})
+            /** @type {{ [k:string]: any }|undefined} */
+            let invFormat
+            for (const k in op.format) {
+              (invFormat ?? (invFormat = {}))[k] = currPos.currentFormats.get(k) ?? null
+            }
+            const childFix = /** @type {ContentType} */ (item.content).type.applyDelta(op.value, origin, { renderer })
+            if (childFix !== null || invFormat !== undefined) {
+              appendModifyFix(childFix, invFormat)
+            }
           } else {
+            const childFix = /** @type {ContentType} */ (item.content).type.applyDelta(op.value, origin, { renderer })
+            currPos.formatText(transaction, /** @type {any} */ (this), 1, op.format || {})
+            if (childFix !== null) {
+              appendModifyFix(childFix)
+            }
+          }
+          expectedIndex += 1
+        } else {
+          error.unexpectedCase()
+        }
+      }
+      for (const op of d.attrs) {
+        if (delta.$setAttrOp.check(op)) {
+          typeMapSet(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key), op.value)
+        } else if (delta.$deleteAttrOp.check(op)) {
+          typeMapDelete(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key))
+        } else {
+          // modifyAttr — locate the target renderer-aware: a deleted map value may still be rendered
+          const mapItem = this._map.get(/** @type {any} */ (op.key))
+          const sub = mapItem === undefined
+            ? undefined
+            : (mapItem.deleted
+                ? (mapItem.content.constructor === ContentType && rendererContentLength(renderer, mapItem) > 0
+                    ? /** @type {ContentType} */ (mapItem.content).type
+                    : undefined)
+                : mapItem.content.getContent()[mapItem.length - 1])
+          if (!(sub instanceof YType)) {
             error.unexpectedCase()
           }
-        }
-        for (const op of d.attrs) {
-          if (delta.$setAttrOp.check(op)) {
-            typeMapSet(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key), op.value)
-          } else if (delta.$deleteAttrOp.check(op)) {
-            typeMapDelete(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key))
-          } else {
-            const sub = typeMapGet(/** @type {any} */ (this), /** @type {any} */ (op.key))
-            if (!(sub instanceof YType)) {
-              error.unexpectedCase()
-            }
-            sub.applyDelta(op.value, origin, { renderer })
+          const subFix = sub.applyDelta(op.value, origin, { renderer })
+          if (subFix !== null) {
+            const f = fix ?? (fix = /** @type {any} */ (delta.create()))
+            f.modifyAttr(/** @type {any} */ (op.key), /** @type {any} */ (subFix))
           }
         }
-      }, origin)
-    }
-    return null
+      }
+      return fix !== null && !(/** @type {delta.DeltaBuilder<any>} */ (fix).done(false).isEmpty()) ? fix : null
+    }, origin)
   }
 
   /**
@@ -2339,7 +2425,6 @@ export const typeMapGetAll = (parent) => {
  * @param {AbstractRenderer?} renderer
  * @param {boolean} deep
  * @param {Set<YType>|Map<YType,any>|null} [modified] - set of types that should be rendered as modified children
- * @param {IdSet?} [deletedItems]
  * @param {IdSet?} [itemsToRender]
  * @param {any} [opts]
  * @param {any} [optsAll]
@@ -2347,7 +2432,7 @@ export const typeMapGetAll = (parent) => {
  * @private
  * @function
  */
-export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modified, deletedItems, itemsToRender, opts, optsAll) => {
+export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modified, itemsToRender, opts, optsAll) => {
   // @todo support modified ops!
   /**
    * @param {Item} item
@@ -2380,7 +2465,16 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
         // emit a positive `SetAttrOp` carrying the attribution metadata - matching how content
         // children are rendered for the same case (positive `InsertOp` with attribution, never
         // `DeleteOp`).
-        if (itemsToRender == null || itemsToRender.hasId(item.lastId)) {
+        // also re-emit when the change happened *inside* the still-rendered value (`modified`
+        // contains the value type but the attr's own map item is not part of the change) — the
+        // deleted value has no modifyAttr path, and a full-state `setAttr` replace is idempotent
+        if (itemsToRender == null || itemsToRender.hasId(item.lastId) || (c instanceof YType && modified != null && modified.has(c))) {
+          if (deep && c instanceof YType) {
+            // full-state value render: a positive `setAttr` *replaces* the attr value on the
+            // consuming side, so the nested type must render as its full attributed state
+            // (change-scoped opts like `itemsToRender` would render bare retains here)
+            c = /** @type {any} */(c).toDelta({ renderer, deep: true })
+          }
           d.setAttr(key, c, attribution)
         }
       } else if (itemsToRender != null && itemsToRender.hasId(item.lastId)) {
@@ -2388,22 +2482,15 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
         // `YEvent` delta, RDT bindings, the maintained `delta` cache) can apply the removal. In
         // full-state mode (`itemsToRender == null`) the attribute is simply omitted (above renders
         // run with `render === false` for such items, so nothing was emitted before either).
-        d.deleteAttr(key, attribution, c)
+        d.deleteAttr(key, attribution)
       }
     } else if (deep && c instanceof YType && modified?.has(c)) {
       d.modifyAttr(key, c.toDelta(opts))
     } else {
-      // find prev content
-      let prevContentItem = item
-      // this algorithm is problematic. should check all previous content using renderer.readcontent
-      for (; prevContentItem.left !== null && deletedItems?.hasId(prevContentItem.left.lastId); prevContentItem = prevContentItem.left) {
-        // nop
-      }
-      const prevValue = (prevContentItem !== item && itemsToRender?.hasId(prevContentItem.lastId)) ? array.last(prevContentItem.content.getContent()) : undefined
       if (deep && c instanceof YType) {
         c = /** @type {any} */(c).toDelta(optsAll)
       }
-      d.setAttr(key, c, attribution, prevValue)
+      d.setAttr(key, c, attribution)
     }
   }
   if (attrsToRender == null) {

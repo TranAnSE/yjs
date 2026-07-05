@@ -431,22 +431,22 @@ export const testChangeEvent = tc => {
   })
   map0.setAttr('a', 1)
   let keyChange = changes.attrs.a
-  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.prevValue === undefined)
+  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.value === 1)
   map0.setAttr('a', 2)
   keyChange = changes.attrs.a
-  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.prevValue === 1)
+  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.value === 2)
   users[0].transact(() => {
     map0.setAttr('a', 3)
     map0.setAttr('a', 4)
   })
   keyChange = changes.attrs.a
-  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.prevValue === 2)
+  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.value === 4)
   users[0].transact(() => {
     map0.setAttr('b', 1)
     map0.setAttr('b', 2)
   })
   keyChange = changes.attrs.b
-  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.prevValue === undefined)
+  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.value === 2)
   users[0].transact(() => {
     map0.setAttr('c', 1)
     map0.deleteAttr('c')
@@ -457,7 +457,7 @@ export const testChangeEvent = tc => {
     map0.setAttr('d', 2)
   })
   keyChange = changes.attrs.d
-  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.prevValue === undefined)
+  t.assert(delta.$setAttrOpWith(s.$number).check(keyChange) && keyChange.value === 2)
   compare(users)
 }
 
