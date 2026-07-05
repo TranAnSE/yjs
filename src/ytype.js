@@ -1153,6 +1153,11 @@ export class YType extends ObservableV2 {
                 if (c.deleted && c.content.constructor === ContentType) {
                   // @todo use current transaction instead
                   d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll), undefined, attribution ?? null)
+                } else if (c.content.constructor === ContentType && modified?.has(/** @type {ContentType} */ (c.content).type)) {
+                  // a de/re-attributed node the renderer still claims (e.g. a partial accept):
+                  // merge/clear its own attribution and descend so the nested walk heals exactly
+                  // the child ids in `itemsToRender` — other children keep their attribution
+                  d.modify(/** @type {any} */ (c.content).type.toDelta(optsAll), undefined, attribution ?? clearedOwnAttribution())
                 } else {
                   d.retain(c.content.getLength(), undefined, attribution ?? clearedOwnAttribution())
                 }
@@ -1404,9 +1409,17 @@ export class YType extends ObservableV2 {
                   d.retain(content.constructor === ContentString ? idrange.len : 1)
                 }
               } else if (retainInserts) {
-                d.useFormats(changedFormats)
-                usingChangedFormats = true
-                d.retain(idrange.len, undefined, clearedOwnAttribution())
+                if (content.constructor === ContentType && modified?.has(/** @type {ContentType} */ (content).type)) {
+                  // a de/re-attributed node (e.g. its insert-suggestion was accepted): clear its
+                  // own attribution and descend so the nested walk heals exactly the child ids
+                  // present in `itemsToRender` — children outside the change set keep their
+                  // attribution (id-scoped, never a blanket subtree clear)
+                  d.modify(/** @type {ContentType} */ (content).type.toDelta(optsAll), undefined, clearedOwnAttribution())
+                } else {
+                  d.useFormats(changedFormats)
+                  usingChangedFormats = true
+                  d.retain(idrange.len, undefined, clearedOwnAttribution())
+                }
               } else {
                 d.useFormats(currentFormats)
                 usingCurrentFormats = true

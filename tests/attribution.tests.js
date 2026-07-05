@@ -1480,4 +1480,51 @@ export const testRdtAcceptingNodeInsertRenderedAsSuggestion = () => {
   }
   t.assert(!JSON.stringify(composed.toJSON()).includes('"attribution"'), 'the settled event stream must not present the committed insert as a suggestion')
   t.assert(composed.equals(fresh), 'composing the emitted changes converges to a fresh render')
+  // deeper nesting must heal at *every* level below the top, not just the first
+  ytype.applyDelta(delta.create().retain(2).insert([delta.create('blockquote', {}, [delta.create('paragraph', {}, 'deep')])]).done())
+  const fresh2 = ytype.toDelta({ deep: true })
+  t.assert(!JSON.stringify(fresh2.toJSON()).includes('"attribution"'), 'ground truth: the multi-level insert committed to base')
+  t.assert(!JSON.stringify(composed.toJSON()).includes('"attribution"'), 'no nesting level is left presented as a suggestion')
+  t.assert(composed.equals(fresh2), 'the event stream converges for multi-level nesting')
+}
+
+/**
+ * Guards the id-scoped heal design: unattributing an accepted node must never cascade into a
+ * blanket subtree clear, because children may still be attributed. Here only the node's OWN
+ * insert-suggestion is accepted (`acceptChanges` with a range covering just the node id) — the
+ * node commits to base as an empty paragraph while its text children remain pending
+ * suggestions. The heal must clear the node's attribution, keep the children's `{insert: []}`,
+ * and keep the maintained cache equal to a fresh render.
+ */
+export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
+  const doc = new Y.Doc({ gc: false })
+  const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  doc.get('prosemirror').applyDelta(delta.create().insert([delta.create('paragraph', {}, 'base para')]).done())
+  const ytype = suggestionDoc.get('prosemirror')
+  ytype.useRenderer(renderer)
+  t.assert(ytype.delta != null) // materialize the maintained cache
+  renderer.suggestionMode = true
+  const client = suggestionDoc.clientID
+  // suggestion 1: node insert — the paragraph node takes clock 0, its text 'x' clock 1
+  ytype.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'x')]).done())
+  // suggestion 2: more text inside the suggested node
+  ytype.applyDelta(delta.create().retain(1).modify(delta.create().retain(1).insert('Q')).done())
+  t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'consistent before the partial accept')
+  // accept ONLY the node's own id (clock 0); every child stays a pending suggestion
+  renderer.acceptChanges(Y.createID(client, 0))
+  const cached = ytype.delta
+  const fresh = ytype.toDelta({ deep: true })
+  const freshJson = /** @type {any} */ (fresh.toJSON())
+  // ground truth: the node committed (as an empty paragraph) …
+  t.assert(JSON.stringify(doc.get('prosemirror').toDeltaDeep().toJSON()).split('"paragraph"').length === 3, 'the accepted node reached the base doc')
+  t.assert(freshJson.children[0].attribution === undefined, 'the accepted node itself is no longer attributed')
+  // … while its children are still suggested
+  const acceptedPara = freshJson.children[0].insert[1]
+  t.assert(acceptedPara.name === 'paragraph' && JSON.stringify(acceptedPara.children).includes('"attribution":{"insert":[]}'), 'pending child suggestions keep their attribution')
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after the partial accept')
 }
