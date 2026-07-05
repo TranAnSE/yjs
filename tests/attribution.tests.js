@@ -717,7 +717,7 @@ export const testRdtDeltaAttributionSanity = () => {
 }
 
 /**
- * Currently-failing repro: formatting across a suggestion-deleted range with an
+ * Regression pin (originally a failing repro): formatting across a suggestion-deleted range with an
  * accepting renderer (suggestionMode=false) drifts the maintained `.delta`
  * cache — the change render attributes the formatted runs
  * (`{format:{code:[]}}`) while a fresh deep render nets no format attribution
@@ -1391,7 +1391,7 @@ export const testRdtDeletedSubtreeUndoScope = () => {
 }
 
 /**
- * Currently-failing repro: an *accepting* (suggestionMode=false) child-node insert with no
+ * Regression pin (originally a failing repro): an *accepting* (suggestionMode=false) child-node insert with no
  * suggested content anywhere drifts the maintained `.delta` cache. The inserted node reaches the
  * base doc (asserted below — it is committed content, NOT a suggestion, so the
  * "inserted-adjacent-to-suggested-is-suggested" rule does not apply), and a fresh deep render
@@ -1443,7 +1443,7 @@ export const testRdtAcceptingNodeInsertCacheDrift = () => {
 }
 
 /**
- * Currently-failing repro — the consumer-visible framing of the cache drift above: inserting a
+ * Regression pin (originally a failing repro) — the consumer-visible framing of the cache drift above: inserting a
  * node through an *accepting* renderer (`suggestionMode = false`) must not leave it presented as
  * a suggestion. The write currently emits two `'delta'` events: first the insert render, fully
  * attributed (`{insert: []}` on the inserted node AND its nested content), then a de-attribution
@@ -1922,4 +1922,251 @@ export const testRdtRejectAllOverlappingSameKeyFormatProvenanceResidual = () => 
     console.error('fresh :', JSON.stringify(fresh.toJSON()))
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after rejecting overlapping same-key formats')
+}
+
+/**
+ * Regression pin — fixed by re-adding the reset key as an explicit clear when the ambient-copy
+ * install is forced by the all-null-leaves disjunct (installing after silently dropping the key
+ * would close its governance without the clear the fresh render's context-close implies):
+ * partial-accept cache drift when the accepted id range SPLITS a suggested format's
+ * open/close ContentFormat marker pair. Lifecycle-fuzz seed 648 (failIndex 14, 15 ops incl. an
+ * accept and a reject) minimized to 5 ops with no inserts/deletes at all.
+ *
+ * Shape: two different-key suggested formats on the same char 'A' of base text 'AB'. The sugg
+ * client's structs are exactly four ContentFormat markers — clock 0 = em open ({em:{}}),
+ * clock 1 = em close ({em:null}), clock 2 = strong open, clock 3 = strong close.
+ * `acceptChanges(createID(1,1), createID(1,1))` accepts ONLY the em CLOSE marker (clock 1),
+ * splitting the em pair. The accept itself still renders consistently — the residual is armed,
+ * not visible. The next suggested unformat of 'A' then corrupts the maintained cache: the
+ * incremental render lets the strong suggestion's format attribution run past its close marker
+ * onto the trailing 'B':
+ *
+ *   cached: A(strong, {format:{strong:[]}}) | B({format:{strong:[]}} <- STALE)
+ *   fresh : A(strong, {format:{strong:[]}}) | B
+ *
+ * Load-bearing (each verified): the accept range must contain the em close marker and NOT the
+ * em open marker (1-1, 1-2, 1-3 all drift; 0-0, 0-1 whole-pair, 2-2, 3-3 all clean) — the
+ * marker-pair split IS the trigger; a second suggested format with a different key and non-null
+ * value (same key em -> clean, strong:null -> clean); a trailing char after the formatted one
+ * (init 'A' alone -> clean, formatting the last char -> clean); the final op must be an
+ * unformat — em:{} reformat is clean, while em:null and strong:null both drift identically.
+ * Every step before the final unformat is consistent, including the accept. Both clientID
+ * orders fail byte-identically; the accept does not echo structs back (no Math.random clientID
+ * reassignment), so the repro is seed-free: 100/100 identical failing runs. Same stale-
+ * {format:{strong:[]}}-on-trailing-char symptom as the (fixed)
+ * testRdtRejectAllOverlappingSameKeyFormatProvenanceResidual pin, but a distinct class: no base
+ * format involved, the trigger is a marker-splitting PARTIAL accept, and the drift is deferred
+ * to a later unformat.
+ */
+export const testRdtSplitFormatMarkerPairPartialAcceptThenUnformatCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('AB').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // two different-key suggested formats on 'A' — sugg structs: clock 0/1 = em open/close,
+  // clock 2/3 = strong open/close
+  st.applyDelta(delta.create().retain(1, { em: {} }).done())
+  st.applyDelta(delta.create().retain(1, { strong: {} }).done())
+  // accept ONLY the em close marker (clock 1), splitting the em marker pair — the accept
+  // itself still renders consistently
+  renderer.acceptChanges(Y.createID(1, 1), Y.createID(1, 1))
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'consistent immediately after the marker-splitting accept')
+  // suggested unformat of 'A' → the cache leaks {format:{strong:[]}} onto the trailing 'B'
+  st.applyDelta(delta.create().retain(1, { em: null }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after unformatting under a split-accepted format marker pair')
+}
+
+/**
+ * Regression pin — fixed by the same reset-branch clear re-add as the split-marker-pair class
+ * above (both are the marker-pair-splitting-accept walk shape). Minimized from lifecycle-fuzz
+ * seed 1034 (failIndex 15, 16 ops → 6):
+ * PARTIAL-ACCEPT-triggered LATENT cache drift, stale-attribution direction. A committed base
+ * `strong` over 'abc'; a suggested unformat (strong → null) of 'b' (sugg-client markers:
+ * clock 0 = open strong:null, clock 1 = close/restore strong:{}); a second suggested format
+ * with a DIFFERENT key (em:{}) on the same 'b' (clocks 2/3); then a partial
+ * `acceptChanges(id(1,1), id(1,1))` that accepts ONLY the unformat's range-END restore marker,
+ * skipping its open marker at clock 0. The accept itself still renders consistently — the
+ * corruption is latent — but the next suggested format edit over the region (removing the em)
+ * re-renders 'c' with a stale `{format:{strong:[]}}` the fresh deep render does not have:
+ *
+ *   cached: a(strong) | b({format:{strong:[]}}) | c(strong, {format:{strong:[]}} ← STALE)
+ *   fresh : a(strong) | b({format:{strong:[]}}) | c(strong)
+ *
+ * Load-bearing: the accept range must EXCLUDE clock 0 and include at least one later sugg
+ * marker — accept(1,1), accept(2,2) and accept(3,3) all drift identically, while accept(0,0),
+ * accept(0,3), acceptAll and reject(1,1) render clean; the second suggested format must exist
+ * BEFORE the accept and use a different key (dropping it, or using strong for both, renders
+ * clean — which op carries which key does not matter, swapped keys drift too); the final op
+ * must be a format CHANGE re-rendering the region (em:null on 'b' or 'c', or a base em:{} on
+ * 'b' — re-applying the same em:{}, inserts, deletes and clearCache all render clean); and the
+ * committed strong must extend both strictly before and strictly past 'b' (2-char docs 'ab'/'bc'
+ * and base ranges not covering 'a' or 'c' render clean). Both clientID orders drift identically;
+ * the accept does not echo structs back (clientIDs survive unreassigned), so the repro is
+ * Math.random-free: 100/100 identical failing runs without seeding, on both trees. Related to
+ * (but distinct from) the fixed testRdtAcceptAllOfSameValueSuggestedFormatCacheDrift: here
+ * acceptAll is CLEAN, the partial id range is essential, and the drift needs a second op after
+ * the accept.
+ */
+export const testRdtPartialAcceptSkippingUnformatOpenMarkerCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert('abc').done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // committed base strong over all of 'abc' — must extend both before and past 'b'
+  bt.applyDelta(delta.create().retain(3, { strong: {} }).done())
+  // suggested unformat of the base strong on 'b' → sugg-client markers
+  // clock 0 (open, strong:null) and clock 1 (close/restore, strong:{})
+  st.applyDelta(delta.create().retain(1).retain(1, { strong: null }).done())
+  // second suggested format (different key) on the same 'b' → clocks 2 (em:{}) and 3 (em:null)
+  st.applyDelta(delta.create().retain(1).retain(1, { em: {} }).done())
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'consistent before the accept')
+  // PARTIAL accept of only clock 1 — the unformat's range-END restore marker — skipping the
+  // open marker at clock 0. The accept itself still renders consistently (latent corruption).
+  renderer.acceptChanges(Y.createID(1, 1), Y.createID(1, 1))
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'consistent after the partial accept')
+  // suggested removal of the em → the re-render leaves a stale {format:{strong:[]}} on 'c'
+  st.applyDelta(delta.create().retain(1).retain(1, { em: null }).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a format edit following a partial accept that skipped the unformat open marker')
+}
+
+/**
+ * Regression pin — fixed by threading `fresh` onto fresh-format pieces (mode-0 retained path)
+ * so a fresh reset-to-previous marker emits the per-key attribution clear like a rendered
+ * marker. The removeMark class from y-prosemirror cohort-fuzz seeds 143
+ * (drift at op #35), 2 (op #46) and 18 (op #63), which all collapse to this one 3-op
+ * skeleton (cross-checked: each seed's failing op is a no-suggestions user's removeMark,
+ * i.e. a BASE-doc unformat, over text inside a suggested-block-deleted paragraph, and each
+ * seed's drift is the same stale format-attribution shape). STALE-attribution class in the
+ * nested deleted-children render path: a base-doc partial unformat (strong: null) of a base
+ * format on text inside a paragraph that is block-deleted as a suggestion never lands in the
+ * maintained cache — the cached delta after the op is byte-identical to the pre-op state,
+ * while the fresh deep render drops the format attribution on the covered chars:
+ *
+ *   cached: paragraph[ ab({format:{strong:[]},delete:[]}) ]   ← stale strong:[] on 'b'
+ *   fresh : paragraph[ a({format:{strong:[]},delete:[]}) | b({delete:[]}) ]
+ *
+ * Load-bearing: the suggested BLOCK delete of the paragraph embed (a flat-YText suggested
+ * delete renders clean, and a text-level delete inside the paragraph renders clean), the
+ * base-side provenance of format+unformat (a sugg-side format/unformat pair inside the
+ * deleted paragraph renders clean), the unformat being a REMOVAL (re-formatting 'b' to a
+ * different value {x:1} renders clean; a partial format with no prior format renders clean),
+ * and the partial unformat clearing the TRAILING part of the formatted run (a full-range
+ * unformat renders clean, unformatting only the leading 'a' renders clean, and a 1-char
+ * format with the unformat extending past its end renders clean — hence the two chars).
+ * NOT load-bearing: the format key (em drifts identically), the order of the block delete
+ * vs the base format (format-before-delete drifts identically), and the clientID order
+ * (both 0/1 and 1/0 drift identically). No accept/reject is involved, so no Math.random
+ * clientID reassignment can occur: 100/100 byte-identical failing runs without seeding.
+ * Fails identically on the unpatched baseline — a pre-existing class, disjoint from the
+ * seven flat-text pins above (this one needs the deleted-ContentType modify render path;
+ * likely the known "modify targeting a tombstoned child is skipped by the incremental
+ * change render" defect).
+ */
+export const testRdtBaseUnformatInsideBlockDeletedParagraphCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  bt.applyDelta(delta.create().insert([delta.create('paragraph', {}, 'ab')]).done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // suggested block delete of the whole paragraph
+  st.applyDelta(delta.create().delete(1).done())
+  // base strong over both chars inside the (suggested-deleted) paragraph — renders as an
+  // attributed format on the deleted text; still consistent here
+  bt.applyDelta(delta.create().modify(delta.create('paragraph').retain(2, { strong: {} }).done()).done())
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'consistent before the unformat')
+  // base unformat of the TRAILING char only — fresh drops the strong:[] attribution on 'b',
+  // the maintained cache keeps it on all of 'ab' (the change never lands in the cache)
+  bt.applyDelta(delta.create().modify(delta.create('paragraph').retain(1).retain(1, { strong: null }).done()).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base partial unformat inside a block-deleted paragraph')
+}
+
+/**
+ * Regression pin — fixed by the same fresh-format `c.fresh` threading as the class above.
+ * Minimized from y-prosemirror fuzz seed 103 (cache
+ * drift at op #68: a no-suggestions user's deleteRange whose PM diff carried a `{em:null}`
+ * format clear into the base doc, `retain(2).delete(2).insert('tl',{strong}).retain(1,{em:null})
+ * .delete(4)` inside a modify). The 6-user cohort, the ProseMirror layer and the 68-op history
+ * are NOT load-bearing — fresh docs + a fresh renderer rebuilt from the pre-op state snapshot
+ * drift identically, and the class reduces to 2 ops on a 1-paragraph doc:
+ * a base-doc format CLEAR (key → null) ending strictly *inside* the same-key base format run,
+ * applied INSIDE a suggestion-deleted paragraph (a whole-node tombstone, still rendered
+ * delete-attributed), never reaches the maintained cache. The change render re-stamps the
+ * ambient `{format:{em:[]}}` attribution over the run instead of emitting the clear (and fires
+ * 'delta' twice for the one base transaction); a fresh deep render is correct:
+ *
+ *   cached: ab({format:{em:[]}, delete:[]})                               ← clear LOST
+ *   fresh : a({format:{em:[]}, delete:[]}) | b({delete:[]})
+ *
+ * Load-bearing shape: the WHOLE-NODE suggestion-delete (a text-level suggestion-delete of the
+ * same chars renders clean, as does every flat-text variant), the format CLEAR direction (a
+ * format add inside the tombstone renders clean — the green
+ * testRdtDeltaFormatThroughDeletedParent contract), and the run extending before the cleared
+ * char (em on 'b' alone, clearing the leading char, or a whole-run single-char clear all render
+ * clean; clearing a middle char of 'abc' drifts too). Key (em/strong) and format value ({} vs
+ * true) are not load-bearing. Both clientID orders drift identically (100/100 unseeded, no
+ * accept/reject involved).
+ */
+export const testRdtBaseFormatClearInsideSuggestionDeletedParagraphCacheDrift = () => {
+  const base = new Y.Doc({ gc: false })
+  base.clientID = 0
+  const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  sugg.clientID = 1
+  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  renderer.suggestionMode = true
+  const bt = base.get('t')
+  const st = sugg.get('t')
+  // base paragraph with an em run over 'ab'
+  bt.applyDelta(delta.create().insert([delta.create('paragraph').insert('ab', { em: {} })]).done())
+  st.useRenderer(renderer)
+  t.assert(st.delta != null) // materialize the maintained cache
+  // suggestion-delete the whole paragraph (stays rendered as an attributed tombstone)
+  st.applyDelta(delta.create().delete(1).done())
+  t.assert(st.delta.equals(st.toDelta({ deep: true })), 'cache consistent after the suggestion delete')
+  // base clears em on 'b' only — a clear ending strictly inside the em run, inside the tombstone
+  bt.applyDelta(delta.create().modify(delta.create().retain(1).retain(1, { em: null })).done())
+  const cached = st.delta
+  const fresh = st.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error('cached:', JSON.stringify(cached.toJSON()))
+    console.error('fresh :', JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base format clear inside a suggestion-deleted paragraph')
 }

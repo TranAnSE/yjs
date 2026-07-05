@@ -1349,10 +1349,24 @@ export class YType extends ObservableV2 {
                 // modeled as absence in `currentFormats`), just drop the key: a change render must
                 // not emit ops for unchanged ranges, and inserts must stay free of a spurious
                 // `{ format: { [key]: null } }`.
-                if (isRangeEndClear || (attribution != null && itemsToRender != null && (renderContent || renderDelete || renderedFormatKeys?.has(key) === true))) {
+                // `c.fresh`: a marker inserted (and possibly auto-deleted) by this very change —
+                // e.g. a base-doc format clear arriving inside a suggestion-deleted paragraph —
+                // stays on the retained path (mode 0, the fresh-format exemption), but when it
+                // resets-to-previous it is the range END of the attributed run in the new state
+                // and must clear the stale attribution from the cache like a rendered marker.
+                if (isRangeEndClear || (attribution != null && itemsToRender != null && (renderContent || renderDelete || c.fresh || renderedFormatKeys?.has(key) === true))) {
                   changedAttributedFormats[key] = null
                 } else {
                   delete changedAttributedFormats[key]
+                  // pending per-key clears force this copy to install (the all-null disjunct
+                  // below); installing after silently dropping this key would close its
+                  // governance without the clear the fresh render's context-close implies,
+                  // leaving a stale `{ format: { [key]: [] } }` on the following retained
+                  // spans — re-add the key as an explicit clear. Inert outside attributing
+                  // change renders: null leaves cannot exist in fresh contexts.
+                  if (itemsToRender != null && !object.isEmpty(changedAttributedFormats) && object.every(changedAttributedFormats, v => v == null)) {
+                    changedAttributedFormats[key] = null
+                  }
                 }
                 delete previousUnattributedFormats[key]
               } else {
@@ -1513,6 +1527,14 @@ export class YType extends ObservableV2 {
                   renderer.readContent(cs, item.id.client, frange.clock, item.deleted, c, frange.exists ? 3 : 2)
                 }
               }
+            }
+            if (freshFormat) {
+              // fresh format markers stay on the retained path (mode 0, see `checkFresh`), but
+              // the format state machine must still see their freshness: a fresh clear marker
+              // that resets-to-previous ends an attributed range and must emit the per-key
+              // attribution clear (`cs` is reset per item; a freshFormat item is a single
+              // len-1 ContentFormat, so this marks exactly its pieces)
+              for (let i = 0; i < cs.length; i++) { cs[i].fresh = true }
             }
           } else {
             renderer.readContent(cs, item.id.client, item.id.clock, item.deleted, content, 1)
