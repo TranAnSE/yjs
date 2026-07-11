@@ -13,28 +13,87 @@ import { UndoManager, StackItem } from './UndoManager.js'
 
 import { $renderer, AttributedContent } from './renderer-helpers.js'
 
-export { baseRenderer, AbstractRenderer, rendererContentLength, $renderer } from './renderer-helpers.js'
+export { AbstractRenderer, rendererContentLength, $renderer } from './renderer-helpers.js'
 
 /**
+ * Emit a single content piece into `contents`, applying the rendering rules of
+ * {@link AttributionsRenderer}. `inRC` is whether the piece is in `renderedContent` (renders normally,
+ * even when the item is deleted — a "restore"); `attrs` is its attribution (or `null`).
+ *
+ * @param {Array<AttributedContent<any>>} contents - where to write the result
+ * @param {AbstractContent} c
+ * @param {number} clock
+ * @param {boolean} deleted - the item's doc deleted flag
+ * @param {boolean} inRC - whether this piece is in `renderedContent`
+ * @param {Array<ContentAttribute<any>>|null} attrs
+ * @param {0|1|2|3} shouldRender - see {@link AbstractRenderer#readContent}
+ */
+const pushAttributedPiece = (contents, c, clock, deleted, inRC, attrs, shouldRender) => {
+  if (inRC || attrs != null) {
+    // Visible: rendered normally (in `renderedContent`) and/or attributed. A restored deletion
+    // (`inRC`) renders as alive, so its effective `deleted` flag is cleared.
+    contents.push(new AttributedContent(c, clock, deleted && !inRC, attrs, shouldRender))
+  } else if (deleted && shouldRender !== 0 && shouldRender !== 3) {
+    // Genuinely deleted, unattributed, not restored: preserve the legacy retain/delete-op
+    // behavior (mode 3 renders unattributed deleted content as nothing — see DiffRenderer).
+    contents.push(new AttributedContent(c, clock, true, null, shouldRender))
+  }
+  // else: hidden alive content (or invisible deleted content under mode 0/3) — emit nothing.
+}
+
+/**
+ * Renders content with attributions, given a single `attributions` {@link ContentMap} of how to
+ * attribute content and an optional `renderedContent` {@link IdSet} of what renders.
+ *
+ * - `attributions` (inserts ∪ deletes) is merged into a single `renderAs` map; content it covers
+ *   always renders, carrying its attribution.
+ * - `renderedContent` defines the content that renders *normally* — even if the item is marked
+ *   deleted in the doc (a "restore"). It defaults to the doc's alive content (`inserts − deletes`),
+ *   applied implicitly (a piece is in the default set ⟺ its item is not `deleted`), so the common
+ *   "pure attribution overlay" case does no extra work. When a custom set is supplied it is
+ *   authoritative: alive content omitted from it (and unattributed) is hidden.
+ *
+ * Restoring deleted content requires `gc: false` on the doc (the renderer does not rehydrate
+ * garbage-collected content, unlike {@link DiffRenderer}).
+ *
  * @implements AbstractRenderer
  *
  * @extends {ObservableV2<{change:(idset:IdSet,origin:any,local:boolean)=>void}>}
  */
-export class TwosetRenderer extends ObservableV2 {
+export class AttributionsRenderer extends ObservableV2 {
   /**
-   * @param {IdMap<any>} inserts
-   * @param {IdMap<any>} deletes
+   * @param {ContentMap} attributions - how to attribute content (`{ inserts, deletes }` IdMaps)
+   * @param {Object} [options]
+   * @param {IdSet?} [options.renderedContent] - content that renders normally; defaults to the
+   * doc's alive content (`inserts − deletes`), applied implicitly.
    */
-  constructor (inserts, deletes) {
+  constructor (attributions, { renderedContent = null } = {}) {
     super()
-    this.inserts = inserts
-    this.deletes = deletes
     /**
-     * Raw coverage of the two maps — `readContent` remains authoritative for what actually
-     * renders. See {@link AbstractRenderer#attributed}.
+     * The two attribution maps merged into one — `readContent` consults this for how to attribute
+     * a piece.
+     * @type {IdMap<any>}
+     */
+    this.renderAs = mergeIdMaps([attributions.inserts, attributions.deletes])
+    /**
+     * Coverage of `renderAs` (ids that carry attributions). The small set `hasItem` checks. May
+     * over-approximate what actually renders — `readContent` remains authoritative. See
+     * {@link AbstractRenderer#attributed}.
      * @type {IdSet}
      */
-    this.attributed = mergeIdSets([createIdSetFromIdMap(inserts), createIdSetFromIdMap(deletes)])
+    this.attributed = createIdSetFromIdMap(this.renderAs)
+    /**
+     * Custom "content that renders normally" set, or `null` to use the implicit default
+     * (alive ⟺ `!item.deleted`).
+     * @type {IdSet?}
+     */
+    this.renderedContent = renderedContent
+    /**
+     * Union of `renderedContent` and `attributed` — the single cheap "does this produce visible
+     * output?" set. Only materialized when a custom `renderedContent` is supplied.
+     * @type {IdSet?}
+     */
+    this.rendered = renderedContent === null ? null : mergeIdSets([renderedContent, this.attributed])
   }
 
   get $type () { return $renderer }
@@ -44,7 +103,14 @@ export class TwosetRenderer extends ObservableV2 {
    * @return {boolean}
    */
   hasItem (item) {
-    return this.attributed.intersects(item.id.client, item.id.clock, item.length)
+    const { client, clock } = item.id
+    if (this.attributed.intersects(client, clock, item.length)) return true
+    if (this.renderedContent === null) return false
+    // Custom renderedContent differs from the generic fast path for: deleted content that must be
+    // restored, and alive content that must be hidden (not fully covered).
+    return item.deleted
+      ? this.renderedContent.intersects(client, clock, item.length)
+      : !this.renderedContent.covers(client, clock, item.length)
   }
 
   /**
@@ -56,18 +122,49 @@ export class TwosetRenderer extends ObservableV2 {
    * @param {0|1|2|3} shouldRender - whether this should render or just result in a `retain` operation (see AbstractRenderer#readContent)
    */
   readContent (contents, client, clock, deleted, content, shouldRender) {
-    const slice = (deleted ? this.deletes : this.inserts).slice(client, clock, content.getLength())
-    content = slice.length === 1 ? content : content.copy()
-    slice.forEach(s => {
-      const c = content
-      if (s.len < c.getLength()) {
-        content = c.splice(s.len)
+    const total = content.getLength()
+    /**
+     * Segments of the item partitioned by `renderedContent`, or `null` when `inRC` is uniform over
+     * the whole item (the common case: default set, or a custom set that fully contains/excludes
+     * the item). `null` lets us slice `renderAs` once.
+     * @type {Array<import('./ids.js').MaybeIdRange>?}
+     */
+    let outer = null
+    let inRC = !deleted // implicit default: alive ⟺ rendered normally
+    if (this.renderedContent !== null) {
+      outer = this.renderedContent.slice(client, clock, total)
+      if (outer.length === 1) {
+        inRC = outer[0].exists
+        outer = null
       }
-      // see DiffRenderer#readContent: mode 3 renders unattributed deleted content as nothing
-      if (!deleted || s.attrs != null || (shouldRender !== 0 && shouldRender !== 3)) {
-        contents.push(new AttributedContent(c, s.clock, deleted, s.attrs, shouldRender))
+    }
+    if (outer === null) {
+      // Uniform `inRC` — a single `renderAs` slice fixes the attribution boundaries.
+      const slice = this.renderAs.slice(client, clock, total)
+      let rest = slice.length === 1 ? content : content.copy()
+      for (let i = 0; i < slice.length; i++) {
+        const s = slice[i]
+        const c = rest
+        if (i < slice.length - 1) rest = c.splice(s.len)
+        pushAttributedPiece(contents, c, s.clock, deleted, inRC, s.attrs, shouldRender)
       }
-    })
+      return
+    }
+    // General case: partition by `renderedContent` (outer, fixes `inRC`/effectiveDeleted), then by
+    // `renderAs` (inner, fixes attrs). Multiple outer segments ⇒ multi-id (string-like) content, so
+    // copying to avoid mutating the caller's content is safe.
+    let rest = content.copy()
+    for (let oi = 0; oi < outer.length; oi++) {
+      const rcSeg = outer[oi]
+      const slice = this.renderAs.slice(client, rcSeg.clock, rcSeg.len)
+      for (let ii = 0; ii < slice.length; ii++) {
+        const s = slice[ii]
+        const last = oi === outer.length - 1 && ii === slice.length - 1
+        const c = rest
+        if (!last) rest = c.splice(s.len)
+        pushAttributedPiece(contents, c, s.clock, deleted, rcSeg.exists, s.attrs, shouldRender)
+      }
+    }
   }
 
   /**
@@ -77,13 +174,24 @@ export class TwosetRenderer extends ObservableV2 {
   contentLength (item) {
     if (!item.content.isCountable()) {
       return 0
-    } else if (!item.deleted) {
-      return item.length
-    } else {
-      return this.deletes.sliceId(item.id, item.length).reduce((len, s) => s.attrs != null ? len + s.len : len, 0)
     }
+    const { client, clock } = item.id
+    if (this.renderedContent === null) {
+      // Default: alive content renders in full; deleted content only where attributed.
+      return item.deleted ? this.renderAs.coveredLength(client, clock, item.length) : item.length
+    }
+    // Custom: rendered length is |item ∩ rendered| (renderedContent ∪ attributed).
+    return /** @type {IdSet} */ (this.rendered).coveredLength(client, clock, item.length)
   }
 }
+
+/**
+ * @param {ContentMap} attributions - how to attribute content (`{ inserts, deletes }` IdMaps)
+ * @param {Object} [options]
+ * @param {IdSet?} [options.renderedContent] - content that renders normally; defaults to the doc's
+ * alive content (`inserts − deletes`).
+ */
+export const createAttributionsRenderer = (attributions, options) => new AttributionsRenderer(attributions, options)
 
 /**
  * @param {StructStore} store
@@ -197,13 +305,6 @@ const collectSuggestedChanges = (tr, renderer, start, end, collectAll) => {
   return { inserts, deletes }
 }
 
-export class Attributions {
-  constructor () {
-    this.inserts = createIdMap()
-    this.deletes = createIdMap()
-  }
-}
-
 /**
  * @param {IdMap<any>|undefined} attrs
  * @param {IdSet} slice
@@ -221,9 +322,9 @@ export class DiffRenderer extends ObservableV2 {
    * @param {Doc} prevDoc
    * @param {Doc} nextDoc
    * @param {Object} [options] - options for the renderer
-   * @param {Attributions?} [options.attrs] - the attributes to apply to the diff
+   * @param {ContentMap?} [options.attributions] - the attributions to apply to the diff
    */
-  constructor (prevDoc, nextDoc, { attrs = null } = {}) {
+  constructor (prevDoc, nextDoc, { attributions = null } = {}) {
     super()
     const _nextDocInserts = createInsertSetFromStructStore(nextDoc.store, false) // unmaintained
     const _prevDocInserts = createInsertSetFromStructStore(prevDoc.store, false) // unmaintained
@@ -231,8 +332,8 @@ export class DiffRenderer extends ObservableV2 {
     const prevDocDeletes = createDeleteSetFromStructStore(prevDoc.store) // maintained
     const insertDiff = diffIdSet(_nextDocInserts, _prevDocInserts)
     const deleteDiff = diffIdSet(nextDocDeletes, prevDocDeletes)
-    this.inserts = extractAttributions(attrs?.inserts, insertDiff)
-    this.deletes = extractAttributions(attrs?.deletes, deleteDiff)
+    this.inserts = extractAttributions(attributions?.inserts, insertDiff)
+    this.deletes = extractAttributions(attributions?.deletes, deleteDiff)
     /**
      * Raw coverage of `inserts` ∪ `deletes`, maintained alongside them. Over-approximates the
      * actually-rendered set (e.g. it keeps suggested-inserts that were deleted later) —
@@ -247,10 +348,10 @@ export class DiffRenderer extends ObservableV2 {
     this._nextBOH = nextDoc.on('beforeObserverCalls', tr => {
       // update inserts
       const diffInserts = diffIdSet(tr.insertSet, _prevDocInserts)
-      insertIntoIdMap(this.inserts, extractAttributions(attrs?.inserts, diffInserts))
+      insertIntoIdMap(this.inserts, extractAttributions(attributions?.inserts, diffInserts))
       // update deletes
       const diffDeletes = diffIdSet(diffIdSet(tr.deleteSet, prevDocDeletes), this.inserts)
-      insertIntoIdMap(this.deletes, extractAttributions(attrs?.deletes, diffDeletes))
+      insertIntoIdMap(this.deletes, extractAttributions(attributions?.deletes, diffDeletes))
       insertIntoIdSet(this.attributed, diffInserts)
       insertIntoIdSet(this.attributed, diffDeletes)
       // @todo fire update ranges on `diffInserts` and `diffDeletes`
@@ -458,7 +559,7 @@ export class DiffRenderer extends ObservableV2 {
  * @param {Doc} prevDoc
  * @param {Doc} nextDoc
  * @param {Object} [options] - options for the renderer
- * @param {ContentMap?} [options.attrs] - the attributes to apply to the diff
+ * @param {ContentMap?} [options.attributions] - the attributions to apply to the diff
  */
 export const createDiffRenderer = (prevDoc, nextDoc, options) => new DiffRenderer(prevDoc, nextDoc, options)
 

@@ -230,6 +230,60 @@ export class IdSet {
   }
 
   /**
+   * Whether the entire range `[clock, clock+len)` of `client` is contained in this set.
+   * Allocation-free (binary search). Because `getIds()` returns maximal, merged ranges, full
+   * coverage of a range implies it lies within a single range.
+   *
+   * @param {number} client
+   * @param {number} clock
+   * @param {number} len
+   * @return {boolean}
+   */
+  covers (client, clock, len) {
+    const dr = this.clients.get(client)
+    if (dr) {
+      const ranges = dr.getIds()
+      const index = findIndexInIdRanges(ranges, clock)
+      if (index !== null) {
+        const r = ranges[index]
+        return clock + len <= r.clock + r.len
+      }
+    }
+    return false
+  }
+
+  /**
+   * Total number of ids in `[clock, clock+len)` of `client` contained in this set.
+   * Allocation-free (binary search + linear scan of the overlapping ranges). Equivalent to
+   * `slice(client, clock, len).reduce((s, r) => r.exists ? s + r.len : s, 0)` without allocating.
+   *
+   * @param {number} client
+   * @param {number} clock
+   * @param {number} len
+   * @return {number}
+   */
+  coveredLength (client, clock, len) {
+    const dr = this.clients.get(client)
+    let covered = 0
+    if (dr) {
+      const ranges = dr.getIds()
+      const end = clock + len
+      let index = findRangeStartInIdRanges(ranges, clock)
+      if (index !== null) {
+        for (; index < ranges.length; index++) {
+          const r = ranges[index]
+          if (r.clock >= end) break
+          const from = r.clock < clock ? clock : r.clock
+          const rEnd = r.clock + r.len
+          const to = rEnd > end ? end : rEnd
+          covered += to - from
+        }
+      }
+    }
+    return covered
+  }
+
+  /**
    * Return slices of ids that exist in this idset.
    *
    * @param {number} client
@@ -1146,6 +1200,38 @@ export class IdMap {
       return findIndexInIdRanges(dr.getIds(), clock) !== null
     }
     return false
+  }
+
+  /**
+   * Total number of ids in `[clock, clock+len)` of `client` contained in this map (i.e. carrying
+   * an attribution, incl. an empty `[]`). Allocation-free (binary search + linear scan).
+   * Equivalent to `slice(client, clock, len).reduce((s, r) => r.attrs != null ? s + r.len : s, 0)`
+   * without allocating.
+   *
+   * @param {number} client
+   * @param {number} clock
+   * @param {number} len
+   * @return {number}
+   */
+  coveredLength (client, clock, len) {
+    const dr = this.clients.get(client)
+    let covered = 0
+    if (dr) {
+      const ranges = dr.getIds()
+      const end = clock + len
+      let index = findRangeStartInIdRanges(ranges, clock)
+      if (index !== null) {
+        for (; index < ranges.length; index++) {
+          const r = ranges[index]
+          if (r.clock >= end) break
+          const from = r.clock < clock ? clock : r.clock
+          const rEnd = r.clock + r.len
+          const to = rEnd > end ? end : rEnd
+          covered += to - from
+        }
+      }
+    }
+    return covered
   }
 
   /**

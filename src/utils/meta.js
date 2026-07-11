@@ -11,6 +11,7 @@ import {
   diffIdMap,
   mergeIdMaps,
   createIdSet,
+  createIdMap,
   mergeIdSets,
   diffIdSet,
   createIdMapFromIdSet,
@@ -88,11 +89,11 @@ export const mergeContentIds = contents => createContentIds(
 )
 
 /**
- * @param {IdMap<any>} inserts
- * @param {IdMap<any>} deletes
+ * @param {IdMap<any>} [inserts]
+ * @param {IdMap<any>} [deletes]
  * @return {ContentMap}
  */
-export const createContentMap = (inserts, deletes) => ({ inserts, deletes })
+export const createContentMap = (inserts = createIdMap(), deletes = createIdMap()) => ({ inserts, deletes })
 
 /**
  * @param {ContentIds} contentIds

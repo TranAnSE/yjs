@@ -467,11 +467,11 @@ export const testAttributedContent = _tc => {
    */
   const yarray = ydoc.get()
   yarray.insert(0, [1, 2])
-  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
+  let renderer = /** @type {AbstractRenderer?} */ (null)
 
   ydoc.on('afterTransaction', tr => {
-    // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
-    renderer = new Y.TwosetRenderer(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, []))
+    // renderer = new AttributionsRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
+    renderer = new Y.AttributionsRenderer(Y.createContentMap(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, [])))
   })
   t.group('insert / delete', () => {
     ydoc.transact(() => {

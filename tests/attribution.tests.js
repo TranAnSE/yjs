@@ -142,7 +142,7 @@ export const testChildListContent = () => {
 export const testAttributionSession1 = tc => {
   const { testConnector, users, text0, text1 } = init(tc, { users: 3 })
   users[0].gc = false
-  const globalAttributions = new Y.Attributions()
+  const globalAttributions = Y.createContentMap()
   const v1 = Y.cloneDoc(users[0])
   users.forEach(user => user.on('update', (update, _, ydoc, tr) => {
     if (!tr.local) return
@@ -154,20 +154,20 @@ export const testAttributionSession1 = tc => {
   text0.insert(0, 'a')
   text1.insert(0, 'b')
   testConnector.flushAllMessages()
-  const d1 = text0.toDelta({ renderer: Y.createDiffRenderer(v1, users[0], { attrs: globalAttributions }) })
+  const d1 = text0.toDelta({ renderer: Y.createDiffRenderer(v1, users[0], { attributions: globalAttributions }) })
   t.compare(d1, delta.create().insert('a', null, { insert: ['0'] }).insert('b', null, { insert: ['1'] }).done())
   const v2 = Y.cloneDoc(users[0])
   text0.delete(1, 1)
   text1.insert(2, 'c')
   testConnector.flushAllMessages()
-  const d2 = text0.toDelta({ renderer: Y.createDiffRenderer(v2, users[0], { attrs: globalAttributions }) })
+  const d2 = text0.toDelta({ renderer: Y.createDiffRenderer(v2, users[0], { attributions: globalAttributions }) })
   t.compare(d2, delta.create().insert('a').insert('b', null, { delete: ['0'] }).insert('c', null, { insert: ['1'] }).done())
 
-  const onlyUser0ChangesAttributed = {
-    inserts: Y.filterIdMap(globalAttributions.inserts, attrs => attrs.some(attr => attr.name === 'insert' && attr.val === '0')),
-    deletes: Y.filterIdMap(globalAttributions.deletes, attrs => attrs.some(attr => attr.name === 'delete' && attr.val === '0'))
-  }
-  const rendererUser0 = new Y.TwosetRenderer(onlyUser0ChangesAttributed.inserts, onlyUser0ChangesAttributed.deletes)
+  const onlyUser0ChangesAttributed = Y.createContentMap(
+    Y.filterIdMap(globalAttributions.inserts, attrs => attrs.some(attr => attr.name === 'insert' && attr.val === '0')),
+    Y.filterIdMap(globalAttributions.deletes, attrs => attrs.some(attr => attr.name === 'delete' && attr.val === '0'))
+  )
+  const rendererUser0 = new Y.AttributionsRenderer(onlyUser0ChangesAttributed)
   const d3 = text0.toDelta({ renderer: rendererUser0 })
   t.compare(d3, delta.create().insert('a', null, { insert: ['0'] }).insert('b', null, { delete: ['0'] }).insert('c').done())
   Y.undoContentIds(users[0], Y.createContentIdsFromContentMap(onlyUser0ChangesAttributed))
@@ -701,17 +701,17 @@ export const testRdtDeltaAttributionSanity = () => {
   const ydoc = new Y.Doc()
   const root = ydoc.get('root')
   const v1 = Y.cloneDoc(ydoc)
-  const attrs = new Y.Attributions()
+  const attributions = Y.createContentMap()
   ydoc.on('update', (update, _origin, doc, tr) => {
     if (!tr.local) return
     const uid = doc.clientID.toString()
     const cids = Y.createContentIdsFromUpdate(update)
-    Y.insertIntoIdMap(attrs.inserts, Y.createIdMapFromIdSet(cids.inserts, [Y.createContentAttribute('insert', uid)]))
-    Y.insertIntoIdMap(attrs.deletes, Y.createIdMapFromIdSet(cids.deletes, [Y.createContentAttribute('delete', uid)]))
+    Y.insertIntoIdMap(attributions.inserts, Y.createIdMapFromIdSet(cids.inserts, [Y.createContentAttribute('insert', uid)]))
+    Y.insertIntoIdMap(attributions.deletes, Y.createIdMapFromIdSet(cids.deletes, [Y.createContentAttribute('delete', uid)]))
   })
   root.insert(0, 'hello') // a suggestion relative to v1
   const uid = ydoc.clientID.toString()
-  root.useRenderer(Y.createDiffRenderer(v1, ydoc, { attrs }))
+  root.useRenderer(Y.createDiffRenderer(v1, ydoc, { attributions }))
   t.assert(root.delta.equals(delta.create().insert('hello', null, { insert: [uid] }).done()))
   t.assert(root.delta.equals(root.toDelta({ deep: true })))
 }
@@ -729,7 +729,7 @@ export const testRdtDeltaAttributionSanity = () => {
 export const testRdtFormatAcrossSuggestionDeletedDrift = () => {
   const doc = new Y.Doc({ gc: false })
   const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
-  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
   )
@@ -767,7 +767,7 @@ const createSuggestionPair = (baseClientID, sdocClientID, useRootRenderer = true
   doc.clientID = baseClientID
   const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sdoc.clientID = sdocClientID
-  const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
   )
@@ -885,7 +885,7 @@ export const testRdtDeltaFreshRangeAfterItemMerge = () => {
   doc.clientID = 1
   const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sdoc.clientID = 2
-  const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
   doc.get('t').applyDelta(delta.create().insert('XY').done())
   const ytype = sdoc.get('t')
   ytype.useRenderer(renderer)
@@ -1009,7 +1009,7 @@ export const testRdtApplyDeltaNodeFormatOnTombstoneInverse = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('prosemirror').applyDelta(
       delta.create().insert([delta.create('paragraph', {}, 'aa'), delta.create('paragraph', {}, 'bb')]).done()
     )
@@ -1040,7 +1040,7 @@ export const testRdtApplyDeltaMixedFixCoordinates = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('prosemirror').applyDelta(
       delta.create().insert([
         delta.create('paragraph', {}, 'aa'), delta.create('paragraph', {}, 'hello world'), delta.create('paragraph', {}, 'cc')
@@ -1079,7 +1079,7 @@ export const testRdtApplyDeltaModifyAttrOnDeletedMapValue = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     const title = doc.get('m').setAttr('title', new Y.Type())
     title.insert(0, 'hi')
     const m = sdoc.get('m')
@@ -1152,7 +1152,7 @@ export const testRdtApplyDeltaNestedTombstoneFixBubbles = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('prosemirror').applyDelta(
       delta.create().insert([delta.create('paragraph', {}, [delta.create('nested', {}, 'ww')])]).done()
     )
@@ -1186,7 +1186,7 @@ export const testRdtApplyDeltaPureDeleteOverTombstoneNoFix = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('prosemirror').applyDelta(
       delta.create().insert([
         delta.create('paragraph', {}, 'aa'), delta.create('paragraph', {}, 'hello world'), delta.create('paragraph', {}, 'cc')
@@ -1215,7 +1215,7 @@ export const testRdtApplyDeltaDeleteMidStruckChunkKeepsCursorSync = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('t').applyDelta(delta.create().insert('abc').done())
     doc.get('t').applyDelta(delta.create().retain(3).insert([delta.create('nA', {}, 'kk'), delta.create('nB', {}, 'qqq')]).done())
     const ytype = sdoc.get('t')
@@ -1250,7 +1250,7 @@ export const testRdtDeltaThroughDeletedAttrValue = () => {
     doc.clientID = baseClientID
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
-    const renderer = Y.createDiffRenderer(doc, sdoc, { attrs: new Y.Attributions() })
+    const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     const title = doc.get('m').setAttr('title', new Y.Type())
     title.insert(0, 'hi')
     const m = sdoc.get('m')
@@ -1404,7 +1404,7 @@ export const testRdtDeletedSubtreeUndoScope = () => {
 export const testRdtAcceptingNodeInsertCacheDrift = () => {
   const doc = new Y.Doc({ gc: false })
   const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
-  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
   renderer.suggestionMode = false
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'base para')]).done()
@@ -1429,7 +1429,7 @@ export const testRdtAcceptingNodeInsertCacheDrift = () => {
   {
     const doc2 = new Y.Doc({ gc: false })
     const suggestionDoc2 = new Y.Doc({ isSuggestionDoc: true, gc: false })
-    const renderer2 = Y.createDiffRenderer(doc2, suggestionDoc2, { attrs: new Y.Attributions() })
+    const renderer2 = Y.createDiffRenderer(doc2, suggestionDoc2, { attributions: Y.createContentMap() })
     doc2.get('prosemirror').applyDelta(delta.create().insert([delta.create('paragraph', {}, 'base para')]).done())
     const ytype2 = suggestionDoc2.get('prosemirror')
     ytype2.useRenderer(renderer2)
@@ -1458,7 +1458,7 @@ export const testRdtAcceptingNodeInsertCacheDrift = () => {
 export const testRdtAcceptingNodeInsertRenderedAsSuggestion = () => {
   const doc = new Y.Doc({ gc: false })
   const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
-  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
   renderer.suggestionMode = false
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'base para')]).done()
@@ -1499,7 +1499,7 @@ export const testRdtAcceptingNodeInsertRenderedAsSuggestion = () => {
 export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
   const doc = new Y.Doc({ gc: false })
   const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
-  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
   doc.get('prosemirror').applyDelta(delta.create().insert([delta.create('paragraph', {}, 'base para')]).done())
   const ytype = suggestionDoc.get('prosemirror')
   ytype.useRenderer(renderer)
@@ -1553,7 +1553,7 @@ export const testRdtBaseInsertIntoOverlappingFormatRangeCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1599,7 +1599,7 @@ export const testRdtSuggestedInsertUnderTwoKeySuggestedFormatsCacheDrift = () =>
   base.clientID = 1
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 0
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1646,7 +1646,7 @@ export const testRdtFormattedBaseInsertUnderTwoKeySuggestedFormatsCacheDrift = (
   base.clientID = 1
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 0
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1698,7 +1698,7 @@ export const testRdtBaseFormatEndingInsideSuggestedFormatRangeFormatValueCacheDr
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1748,7 +1748,7 @@ export const testRdtSuggestedRemovalOfOverriddenBaseFormatCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1797,7 +1797,7 @@ export const testRdtStagedSuggestedUnformatOfBaseFormatCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1850,7 +1850,7 @@ export const testRdtAcceptAllOfSameValueSuggestedFormatCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1901,7 +1901,7 @@ export const testRdtRejectAllOverlappingSameKeyFormatProvenanceResidual = () => 
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -1963,7 +1963,7 @@ export const testRdtSplitFormatMarkerPairPartialAcceptThenUnformatCacheDrift = (
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -2025,7 +2025,7 @@ export const testRdtPartialAcceptSkippingUnformatOpenMarkerCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -2093,7 +2093,7 @@ export const testRdtBaseUnformatInsideBlockDeletedParagraphCacheDrift = () => {
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')
@@ -2149,7 +2149,7 @@ export const testRdtBaseFormatClearInsideSuggestionDeletedParagraphCacheDrift = 
   base.clientID = 0
   const sugg = new Y.Doc({ isSuggestionDoc: true, gc: false })
   sugg.clientID = 1
-  const renderer = Y.createDiffRenderer(base, sugg, { attrs: new Y.Attributions() })
+  const renderer = Y.createDiffRenderer(base, sugg, { attributions: Y.createContentMap() })
   renderer.suggestionMode = true
   const bt = base.get('t')
   const st = sugg.get('t')

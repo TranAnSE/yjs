@@ -139,10 +139,10 @@ export const testFragmentAttributedContent = _tc => {
   const elem3 = Y.Type.from(delta.create().insert('world'))
   yfragment.insert(0, [elem1, elem2])
   ydoc.get().insert(0, [yfragment])
-  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
+  let renderer = /** @type {AbstractRenderer?} */ (null)
   ydoc.on('afterTransaction', tr => {
-    // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
-    renderer = new Y.TwosetRenderer(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, []))
+    // renderer = new AttributionsRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
+    renderer = new Y.AttributionsRenderer(Y.createContentMap(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, [])))
   })
   t.group('insert / delete', () => {
     ydoc.transact(() => {
@@ -167,10 +167,10 @@ export const testElementAttributedContent = _tc => {
   const elem2 = delta.create('span').done()
   const elem3 = delta.create().insert('world').done()
   yelement.insert(0, [elem1, elem2])
-  let renderer = /** @type {AbstractRenderer?} */ (Y.baseRenderer)
+  let renderer = /** @type {AbstractRenderer?} */ (null)
   ydoc.on('afterTransaction', tr => {
-    // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
-    renderer = new Y.TwosetRenderer(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, []))
+    // renderer = new AttributionsRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
+    renderer = new Y.AttributionsRenderer(Y.createContentMap(Y.createIdMapFromIdSet(tr.insertSet, []), Y.createIdMapFromIdSet(tr.deleteSet, [])))
   })
   t.group('insert / delete', () => {
     ydoc.transact(() => {

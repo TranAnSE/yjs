@@ -1,6 +1,6 @@
 import * as Y from '../src/index.js'
 import { init, compare, applyRandomTests, Doc } from './testHelper.js' // eslint-disable-line
-import { baseRenderer, TwosetRenderer } from '../src/utils/Renderer.js'
+import { AttributionsRenderer } from '../src/utils/Renderer.js'
 import { createIdMapFromIdSet } from '../src/utils/ids.js'
 import * as t from 'lib0/testing'
 import * as prng from 'lib0/prng'
@@ -552,11 +552,11 @@ export const testYmapEventHasCorrectValueWhenSettingAPrimitiveFromOtherUser = tc
 export const testAttributedContent = _tc => {
   const ydoc = new Y.Doc({ gc: false })
   const ymap = ydoc.get()
-  let renderer = /** @type {AbstractRenderer?} */ (baseRenderer)
+  let renderer = /** @type {AbstractRenderer?} */ (null)
 
   ydoc.on('afterTransaction', tr => {
-    // renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
-    renderer = new TwosetRenderer(createIdMapFromIdSet(tr.insertSet, []), createIdMapFromIdSet(tr.deleteSet, []))
+    // renderer = new AttributionsRenderer(createIdMapFromIdSet(tr.insertSet, [new Y.Attribution('insertAt', 42), new Y.Attribution('insert', 'kevin')]), createIdMapFromIdSet(tr.deleteSet, [new Y.Attribution('delete', 'kevin')]))
+    renderer = new AttributionsRenderer(Y.createContentMap(createIdMapFromIdSet(tr.insertSet, []), createIdMapFromIdSet(tr.deleteSet, [])))
   })
   t.group('initial value', () => {
     ymap.setAttr('test', 42)

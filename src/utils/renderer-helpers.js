@@ -110,16 +110,6 @@ export class AbstractRenderer extends ObservableV2 {
 export const $renderer = AbstractRenderer.prototype.$type = s.$type('y:r', AbstractRenderer)
 
 /**
- * The absence of a renderer: content renders as-is via the generic fast path, without any
- * attribution lookups.
- *
- * @deprecated pass `null` (or omit the renderer option) instead — kept as an alias for downstream
- * code that referenced the former base-renderer object.
- * @type {null}
- */
-export const baseRenderer = null
-
-/**
  * Rendered length of `item` under `renderer`: the generic rule — alive countable content renders
  * at full length, everything else at length `0` — unless the renderer claims the item.
  *
