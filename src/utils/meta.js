@@ -43,9 +43,13 @@ export const createContentIdsFromContentMap = contentMap => createContentIds(
 
 /**
  * @param {import('./Doc.js').Doc} ydoc
+ * @param {boolean} insertsContainDeletes - whether the returned `inserts` set includes content that
+ * the doc has already deleted. `true` yields a full structural snapshot (every inserted id);
+ * `false` yields only the doc's currently-visible content (`inserts − deletes`), which is what you
+ * want when the snapshot defines what should render.
  */
-export const createContentIdsFromDoc = ydoc => createContentIds(
-  createInsertSetFromStructStore(ydoc.store, false),
+export const createContentIdsFromDoc = (ydoc, insertsContainDeletes) => createContentIds(
+  createInsertSetFromStructStore(ydoc.store, !insertsContainDeletes),
   createDeleteSetFromStructStore(ydoc.store)
 )
 
@@ -54,7 +58,7 @@ export const createContentIdsFromDoc = ydoc => createContentIds(
  * @param {import('./Doc.js').Doc} ydocNext
  */
 export const createContentIdsFromDocDiff = (ydocPrev, ydocNext) =>
-  excludeContentIds(createContentIdsFromDoc(ydocPrev), createContentIdsFromDoc(ydocNext))
+  excludeContentIds(createContentIdsFromDoc(ydocPrev, true), createContentIdsFromDoc(ydocNext, true))
 
 /**
  * @param {ContentIds} content

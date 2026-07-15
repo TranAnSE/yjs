@@ -2170,3 +2170,34 @@ export const testRdtBaseFormatClearInsideSuggestionDeletedParagraphCacheDrift = 
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base format clear inside a suggestion-deleted paragraph')
 }
+
+/**
+ *
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testAttributionRendererActiveChangesInDiff = _tc => {
+  const ydoc = new Y.Doc({ gc: false })
+  const ytext = ydoc.get()
+  ytext.insert(0, 'hella')
+  const state1 = Y.createContentIdsFromDoc(ydoc, true)
+  ytext.applyDelta(delta.create().retain(4).delete(1).insert('o!').done())
+  const state2 = Y.createContentIdsFromDoc(ydoc, true)
+  ytext.applyDelta(delta.create().retain(5).delete(1).insert(' world').done())
+  // state3 captures the *visible* content (`insertsContainDeletes: false` → inserts already exclude
+  // deletes). Using it both as the intersection target and as `renderedContent` means: a change that
+  // was inserted-then-deleted by state3 (the '!' at clock 6) is no longer an active insert and drops
+  // out, and state3's deletions (the 'a' at clock 4) aren't "restored" so they keep their delete
+  // attribution instead of re-rendering as inserts.
+  const state3 = Y.createContentIdsFromDoc(ydoc, false)
+  ytext.applyDelta(delta.create().delete(11).insert('42').done())
+
+  // render the active changes that happened between state 1 and 2 within state 3.
+  const attrs = Y.createContentMapFromContentIds(Y.intersectContentIds(Y.excludeContentIds(state2, state1), state3), [], [])
+  const renderer = Y.createAttributionsRenderer(attrs, { renderedContent: state3.inserts })
+
+  const attrDelta = ytext.toDelta({ renderer })
+  console.log(attrDelta.toJSON())
+  t.compare(attrDelta, delta.create().insert('hell').insert('a', null, { delete: [] }).insert('o', null, { insert: [] }).insert(' world').done())
+}
+
