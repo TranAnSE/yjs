@@ -2200,4 +2200,3 @@ export const testAttributionRendererActiveChangesInDiff = _tc => {
   console.log(attrDelta.toJSON())
   t.compare(attrDelta, delta.create().insert('hell').insert('a', null, { delete: [] }).insert('o', null, { insert: [] }).insert(' world').done())
 }
-
