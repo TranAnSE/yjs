@@ -413,6 +413,7 @@ language bindings to other languages
   * [ypy](https://github.com/y-crdt/ypy) - Python binding (deprecated, use pycrdt)
 * [ycs](https://github.com/yjs/ycs) - .Net compatible C# implementation.
 * [ygo](https://github.com/reearth/ygo) - Go implementation.
+* [ygo (Deln0r/ygo)](https://github.com/Deln0r/ygo) - Go implementation.
 
 ## Getting Started
 
