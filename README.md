@@ -92,8 +92,7 @@ Showcase](https://yjs-diagram.synergy.codes/).
   sharing analyses, documentation, spreadsheets, and dashboards.
 * [Nosgestesclimat](https://nosgestesclimat.fr/groupe) The french carbon
   footprint calculator has a group P2P mode based on yjs
-* [oorja.io](https://oorja.io) Online meeting spaces extensible with
-  collaborative apps, end-to-end encrypted.
+* [SupaKit](https://supakit.app) Spaces for every idea, task, or project.
 * [LegendKeeper](https://legendkeeper.com) Collaborative campaign planner and
   worldbuilding app for tabletop RPGs.
 * [IllumiDesk](https://illumidesk.com/) Build courses and content with A.I.
