@@ -6,6 +6,7 @@ import * as buf from 'lib0/buffer'
 import * as rabin from 'lib0/hash/rabin'
 import * as array from 'lib0/array'
 import * as map from 'lib0/map'
+import * as s from 'lib0/schema'
 
 import { iterateStructs, findIndexSS, iterateStructsWithoutSplits, tryGc } from './transaction-helpers.js'
 import { UpdateEncoderV2, IdSetEncoderV2 } from './UpdateEncoder.js'
@@ -161,6 +162,32 @@ export class IdRanges {
       ids.length = ids[j - 1].len === 0 ? j - 1 : j
     }
     return ids
+  }
+
+  /**
+   * Test a predicate against every attribute held by these ranges. Does not mutate - see
+   * {@link AttrRanges#everyAttr}.
+   *
+   * This exists because an `IdMap` may hold `IdRanges`: {@link insertIntoIdMap}'s `src` may be an
+   * `IdSet`, and `_insertIntoIdSet` picks the container class from whichever `src` reaches a client
+   * first. For a pure `IdRanges` the loop is vacuous ({@link IdRange#attrs} is always `[]`), but it
+   * must *not* shortcut to `true`: the append branch of `_insertIntoIdSet` copies elements without
+   * checking their class, so an `IdRanges` reached by an `IdSet` first and an `IdMap` second holds
+   * real `AttrRange`s - which {@link $idMap} must still validate.
+   *
+   * @param {(attr:ContentAttribute<any>) => boolean} f
+   * @return {boolean}
+   */
+  everyAttr (f) {
+    const ids = this._ids
+    for (let i = 0; i < ids.length; i++) {
+      const attrs = ids[i].attrs
+      if (attrs == null) continue
+      for (let j = 0; j < attrs.length; j++) {
+        if (!f(attrs[j])) return false
+      }
+    }
+    return true
   }
 }
 
@@ -593,13 +620,29 @@ const _insertIntoIdSet = (dest, src) => {
 export const insertIntoIdSet = _insertIntoIdSet
 
 /**
- * @param {IdMap<any>} dest
- * @param {IdMap<any>|IdSet} src
+ * Note that `src` may be an `IdSet`, in which case `dest` ends up holding `IdRanges` - which carry
+ * no attributes ({@link IdRange#attrs} is `[]`). This is by design; {@link $idMap} tolerates it.
+ *
+ * @type {(dest: IdMap<any>, src: IdMap<any>|IdSet) => void}
  */
 export const insertIntoIdMap = _insertIntoIdSet
 
 /**
  * @todo rename to excludeIdSet | excludeIdMap
+ *
+ * @todo dispatch on the schema rather than `instanceof IdSet`: `const isMap = set.$type ===
+ * $idMapAny`. Mind the polarity - it inverts. `instanceof IdSet` selects the "is a set" branch,
+ * `$type === $idMapAny` selects the "is a map" branch, so both ternaries below flip. Compare
+ * against `$idMapAny` (the interned tag), never `$idMap(attrs)` - that builds a fresh `s.$custom`
+ * per call, so `===` against it is always false.
+ *
+ * The reason is soundness, not speed: `instanceof` walks the prototype chain and is per-install, so
+ * an `IdSet` from a duplicate yjs install falls through to the IdMap branch and we silently build an
+ * IdMap holding IdRanges. `$type` is a single inline-cached load and stays sound across installs -
+ * the same reason `$renderer` uses `$type` over `$instanceOf`. Not a perf win either way: this runs
+ * twice per call, outside both loops.
+ *
+ * Applies equally to `_intersectSets`.
  *
  * Remove all ranges from `exclude` from `ds`. The result is a fresh IdSet containing all ranges from `idSet` that are not
  * in `exclude`.
@@ -678,6 +721,9 @@ export const _diffSet = (set, exclude) => {
 export const diffIdSet = _diffSet
 
 /**
+ * @todo dispatch on `setA.$type === $idMapAny` rather than `setA instanceof IdSet` - see the note
+ * on `_diffSet`. The polarity inverts.
+ *
  * @template {IdSet | IdMap<any>} SetA
  * @template {IdSet | IdMap<any>} SetB
  * @param {SetA} setA
@@ -1145,6 +1191,30 @@ export class AttrRanges {
     }
     return ids
   }
+
+  /**
+   * Test a predicate against every attribute held by these ranges.
+   *
+   * Unlike {@link AttrRanges#getIds} this does **not** sort/merge - i.e. it does not mutate its
+   * receiver, which matters because it backs {@link $idMap}`.check`. The *set* of attributes is
+   * invariant under sorting/merging (merging only ever concatenates existing attr arrays), so this
+   * observes exactly the attributes that `getIds()` would expose.
+   *
+   * @param {(attr:ContentAttribute<Attrs>) => boolean} f
+   * @return {boolean}
+   */
+  everyAttr (f) {
+    const ids = this._ids
+    for (let i = 0; i < ids.length; i++) {
+      const attrs = ids[i].attrs
+      // only `createMaybeAttrRange` yields null attrs, never `clients` - defensive
+      if (attrs == null) continue
+      for (let j = 0; j < attrs.length; j++) {
+        if (!f(attrs[j])) return false
+      }
+    }
+    return true
+  }
 }
 
 /**
@@ -1584,6 +1654,10 @@ export const createIdMap = () => new IdMap()
  *
  * @todo this should be called "excludeIdMap"
  *
+ * @todo the `instanceof IdSet` dispatch this relies on lives in `_diffSet` - see the `$idMapAny`
+ * note there. Separately, the `attrs`/`attrsH` aliasing below leaves a *stale* index on an emptied
+ * result. {@link $idMap} is unaffected: it reads the ranges, which are authoritative.
+ *
  * @template {IdMap<any>} ISet
  * @param {ISet} set
  * @param {IdSet | IdMap<any>} exclude
@@ -1630,3 +1704,49 @@ export const filterIdMap = (idmap, predicate) => {
   })
   return filtered
 }
+
+/**
+ * Schema of an {@link IdSet}.
+ *
+ * Nominal: `check` is a single identity compare against the globally interned `y:idSet` tag, so it
+ * stays sound across duplicate yjs installations (unlike `instanceof`) - the same reason
+ * {@link $renderer} uses `$type`.
+ */
+export const $idSet = IdSet.prototype.$type = s.$type('y:idSet', IdSet)
+
+/**
+ * Schema of an {@link IdMap} with any mapped-value type. This is where the nominal `y:idMap` tag
+ * lives - {@link $idMap} builds on it. Mirrors lib0's `$deltaAny` / `$delta` split.
+ */
+export const $idMapAny = /** @type {s.Schema<IdMap<any>>} */ (IdMap.prototype.$type = s.$type('y:idMap', IdMap))
+
+/**
+ * Schema of an {@link IdMap} whose mapped values ({@link ContentAttribute#val}) all match `$attrs`.
+ *
+ * True iff the value carries the nominal `y:idMap` tag **and** every attribute reachable through
+ * `clients` satisfies `$attrs`. Those ranges are the authoritative content - exactly what
+ * {@link writeIdMap} serializes. An empty map holds no values, so it satisfies every `$attrs`.
+ *
+ * This deliberately ignores `attrs` / `attrsH`: that pair is a hash-interning cache for `===`
+ * comparison (see `_ensureAttrs`), and it drifts from the ranges in *both* directions today -
+ * {@link diffIdMap} aliases a stale index onto an emptied result, while {@link intersectMaps} and
+ * {@link insertIntoIdMap} never rebuild it, so most real maps carry an empty index while holding
+ * values. An index-based check would therefore validate nothing for the common case.
+ *
+ * Like every container schema this is a *snapshot*: an `IdMap` is mutable, so a later `add()` can
+ * invalidate a previously-passing check.
+ *
+ * Allocates a fresh schema per call - hoist it rather than calling it in a hot loop. For a cheap
+ * nominal gate use {@link $idMapAny} (one identity compare).
+ *
+ * @template Attrs
+ * @param {s.Schema<Attrs>} $attrs - schema of the mapped values
+ * @return {s.Schema<IdMap<Attrs>>}
+ */
+export const $idMap = $attrs => s.$custom(o => {
+  if (!$idMapAny.check(o)) return false
+  for (const ranges of o.clients.values()) {
+    if (!ranges.everyAttr(attr => $attrs.check(attr.val))) return false
+  }
+  return true
+})

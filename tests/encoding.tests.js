@@ -11,7 +11,7 @@ import {
   readContentFormat,
   readContentAny,
   readContentDoc
-} from '../src/ytype.js'
+} from '../src/ynode.js'
 
 import * as Y from '../src/index.js'
 

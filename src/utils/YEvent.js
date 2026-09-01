@@ -6,23 +6,23 @@ import { createAbsolutePositionFromRelativePosition, createRelativePosition } fr
 
 /**
  * @template {DeltaConf} DConf
- * YEvent describes the changes on a YType.
+ * YEvent describes the changes on a YNode.
  */
 export class YEvent {
   /**
-   * @param {YType<DConf>} target The changed type.
+   * @param {YNode<DConf>} target The changed type.
    * @param {import('./Transaction.js').Transaction} transaction
    * @param {Set<any>?} subs The keys that changed
    */
   constructor (target, transaction, subs) {
     /**
      * The type on which this event was created on.
-     * @type {import('../ytype.js').YType<DConf>}
+     * @type {import('../ynode.js').YNode<DConf>}
      */
     this.target = target
     /**
      * The current target on which the observe callback is called.
-     * @type {YType<any>}
+     * @type {YNode<any>}
      */
     this.currentTarget = target
     /**
@@ -31,7 +31,7 @@ export class YEvent {
      */
     this.transaction = transaction
     /**
-     * @type {Delta<import('../ytype.js').DeltaConfDeltaToYType<DConf>>|null}
+     * @type {Delta<import('../ynode.js').DeltaConfDeltaToYNode<DConf>>|null}
      */
     this._delta = null
     /**
@@ -85,9 +85,9 @@ export class YEvent {
   /**
    * @template {boolean} [Deep=false]
    * @param {object} [opts]
-   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to the target type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to the target type's active renderer (see {@link YNode#useRenderer}), i.e. `null` (render as-is) unless changed
    * @param {Deep} [opts.deep]
-   * @return {Deep extends true ? Delta<DConf> : Delta<import('../ytype.js').DeltaConfDeltaToYType<DConf>>} The Delta representation of this type.
+   * @return {Deep extends true ? Delta<DConf> : Delta<import('../ynode.js').DeltaConfDeltaToYNode<DConf>>} The Delta representation of this type.
    *
    * @public
    */
@@ -108,7 +108,7 @@ export class YEvent {
     /**
      * @todo this should be done only one in the transaction step
      *
-     * @type {Map<YType,Set<string|null>>|null}
+     * @type {Map<YNode,Set<string|null>>|null}
      */
     let modified = this.transaction.changed
     if (deep) {
@@ -138,7 +138,7 @@ export class YEvent {
    * Compute the changes in the delta format.
    * A {@link https://quilljs.com/docs/delta/|Quill Delta}) that represents the changes on the document.
    *
-   * @type {Delta<import('../ytype.js').DeltaConfDeltaToYType<DConf>>} The Delta representation of this type.
+   * @type {Delta<import('../ynode.js').DeltaConfDeltaToYNode<DConf>>} The Delta representation of this type.
    * @public
    */
   get delta () {
@@ -167,8 +167,8 @@ export class YEvent {
  *   console.log(path) // might look like => [2, 'key1']
  *   child === type.get(path[0]).get(path[1])
  *
- * @param {YType} parent
- * @param {YType} child target
+ * @param {YNode} parent
+ * @param {YNode} child target
  * @param {AbstractRenderer?} renderer
  * @return {Array<string|number>} Path to the target
  *
@@ -183,12 +183,12 @@ export const getPathTo = (parent, child, renderer = null) => {
       // parent is map-ish
       path.unshift(child._item.parentSub)
     } else {
-      const parent = /** @type {import('../ytype.js').YType} */ (child._item.parent)
+      const parent = /** @type {import('../ynode.js').YNode} */ (child._item.parent)
       // parent is array-ish
       const apos = /** @type {import('../utils/RelativePosition.js').AbsolutePosition} */ (createAbsolutePositionFromRelativePosition(createRelativePosition(parent, child._item.id), doc, false, renderer))
       path.unshift(apos.index)
     }
-    child = /** @type {YType} */ (child._item.parent)
+    child = /** @type {YNode} */ (child._item.parent)
   }
   return path
 }

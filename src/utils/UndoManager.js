@@ -11,7 +11,7 @@ import { createID } from './ID.js'
 import { isParentOf } from './isParentOf.js'
 import { getItemCleanStart } from './transaction-helpers.js'
 import { Doc } from './Doc.js'
-import { YType } from '../ytype.js'
+import { YNode } from '../ynode.js'
 
 export class StackItem {
   /**
@@ -34,7 +34,7 @@ export class StackItem {
  */
 const clearUndoManagerStackItem = (tr, um, stackItem) => {
   iterateStructsByIdSet(tr, stackItem.deletes, item => {
-    if (item instanceof Item && um.scope.some(type => type === tr.doc || isParentOf(/** @type {YType} */ (type), item))) {
+    if (item instanceof Item && um.scope.some(type => type === tr.doc || isParentOf(/** @type {YNode} */ (type), item))) {
       keepItem(item, false)
     }
   })
@@ -76,7 +76,7 @@ const popStackItem = (undoManager, stack, eventType) => {
             }
             struct = item
           }
-          if (!struct.deleted && scope.some(type => type === transaction.doc || isParentOf(/** @type {YType} */ (type), /** @type {Item} */ (struct)))) {
+          if (!struct.deleted && scope.some(type => type === transaction.doc || isParentOf(/** @type {YNode} */ (type), /** @type {Item} */ (struct)))) {
             itemsToDelete.push(struct)
           }
         }
@@ -84,7 +84,7 @@ const popStackItem = (undoManager, stack, eventType) => {
       iterateStructsByIdSet(transaction, stackItem.deletes, struct => {
         if (
           struct instanceof Item &&
-          scope.some(type => type === transaction.doc || isParentOf(/** @type {YType} */ (type), struct)) &&
+          scope.some(type => type === transaction.doc || isParentOf(/** @type {YNode} */ (type), struct)) &&
           // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
           !stackItem.inserts.hasId(struct.id)
         ) {
@@ -140,7 +140,7 @@ const popStackItem = (undoManager, stack, eventType) => {
  * @property {StackItem} StackItemEvent.stackItem
  * @property {any} StackItemEvent.origin
  * @property {'undo'|'redo'} StackItemEvent.type
- * @property {Map<YType,Array<YEvent<any>>>} StackItemEvent.changedParentTypes
+ * @property {Map<YNode,Array<YEvent<any>>>} StackItemEvent.changedParentTypes
  */
 
 /**
@@ -154,7 +154,7 @@ const popStackItem = (undoManager, stack, eventType) => {
  */
 export class UndoManager extends ObservableV2 {
   /**
-   * @param {Doc|YType|Array<YType>} typeScope Limits the scope of the UndoManager. If this is set to a ydoc instance, all changes on that ydoc will be undone. If set to a specific type, only changes on that type or its children will be undone. Also accepts an array of types.
+   * @param {Doc|YNode|Array<YNode>} typeScope Limits the scope of the UndoManager. If this is set to a ydoc instance, all changes on that ydoc will be undone. If set to a specific type, only changes on that type or its children will be undone. Also accepts an array of types.
    * @param {UndoManagerOptions} options
    */
   constructor (typeScope, {
@@ -167,7 +167,7 @@ export class UndoManager extends ObservableV2 {
   } = {}) {
     super()
     /**
-     * @type {Array<YType | Doc>}
+     * @type {Array<YNode | Doc>}
      */
     this.scope = []
     this.doc = doc
@@ -207,7 +207,7 @@ export class UndoManager extends ObservableV2 {
       // Only track certain transactions
       if (
         !this.captureTransaction(transaction) ||
-        !this.scope.some(type => transaction.changedParentTypes.has(/** @type {YType} */ (type)) || type === this.doc) ||
+        !this.scope.some(type => transaction.changedParentTypes.has(/** @type {YNode} */ (type)) || type === this.doc) ||
         (!this.trackedOrigins.has(transaction.origin) && (!transaction.origin || !this.trackedOrigins.has(transaction.origin.constructor)))
       ) {
         return
@@ -239,7 +239,7 @@ export class UndoManager extends ObservableV2 {
       }
       // make sure that deleted structs are not gc'd
       iterateStructsByIdSet(transaction, transaction.deleteSet, /** @param {Item|GC} item */ item => {
-        if (item instanceof Item && this.scope.some(type => type === transaction.doc || isParentOf(/** @type {YType} */ (type), item))) {
+        if (item instanceof Item && this.scope.some(type => type === transaction.doc || isParentOf(/** @type {YNode} */ (type), item))) {
           keepItem(item, true)
         }
       })
@@ -261,16 +261,16 @@ export class UndoManager extends ObservableV2 {
   /**
    * Extend the scope.
    *
-   * @param {Array<YType | Doc> | YType | Doc} ytypes
+   * @param {Array<YNode | Doc> | YNode | Doc} ynodes
    */
-  addToScope (ytypes) {
+  addToScope (ynodes) {
     const tmpSet = new Set(this.scope)
-    ytypes = array.isArray(ytypes) ? ytypes : [ytypes]
-    ytypes.forEach(ytype => {
-      if (!tmpSet.has(ytype)) {
-        tmpSet.add(ytype)
-        if (ytype instanceof YType ? ytype.doc !== this.doc : ytype !== this.doc) logging.warn('[yjs#509] Not same Y.Doc') // use MultiDocUndoManager instead. also see https://github.com/yjs/yjs/issues/509
-        this.scope.push(ytype)
+    ynodes = array.isArray(ynodes) ? ynodes : [ynodes]
+    ynodes.forEach(ynode => {
+      if (!tmpSet.has(ynode)) {
+        tmpSet.add(ynode)
+        if (ynode instanceof YNode ? ynode.doc !== this.doc : ynode !== this.doc) logging.warn('[yjs#509] Not same Y.Doc') // use MultiDocUndoManager instead. also see https://github.com/yjs/yjs/issues/509
+        this.scope.push(ynode)
       }
     })
   }
@@ -430,7 +430,7 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
   if (redone !== null) {
     return getItemCleanStart(transaction, redone)
   }
-  let parentItem = /** @type {YType} */ (item.parent)._item
+  let parentItem = /** @type {YNode} */ (item.parent)._item
   /**
    * @type {Item|null}
    */
@@ -450,9 +450,9 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
     }
   }
   /**
-   * @type {YType}
+   * @type {YNode}
    */
-  const parentType = /** @type {YType} */ (parentItem === null ? item.parent : /** @type {ContentType} */ (parentItem.content).type)
+  const parentType = /** @type {YNode} */ (parentItem === null ? item.parent : /** @type {ContentType} */ (parentItem.content).type)
 
   if (item.parentSub === null) {
     // Is an array item. Insert at the old position
@@ -465,10 +465,10 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
        */
       let leftTrace = left
       // trace redone until parent matches
-      while (leftTrace !== null && /** @type {YType} */ (leftTrace.parent)._item !== parentItem) {
+      while (leftTrace !== null && /** @type {YNode} */ (leftTrace.parent)._item !== parentItem) {
         leftTrace = leftTrace.redone === null ? null : getItemCleanStart(transaction, leftTrace.redone)
       }
-      if (leftTrace !== null && /** @type {YType} */ (leftTrace.parent)._item === parentItem) {
+      if (leftTrace !== null && /** @type {YNode} */ (leftTrace.parent)._item === parentItem) {
         left = leftTrace
         break
       }
@@ -480,10 +480,10 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
        */
       let rightTrace = right
       // trace redone until parent matches
-      while (rightTrace !== null && /** @type {YType} */ (rightTrace.parent)._item !== parentItem) {
+      while (rightTrace !== null && /** @type {YNode} */ (rightTrace.parent)._item !== parentItem) {
         rightTrace = rightTrace.redone === null ? null : getItemCleanStart(transaction, rightTrace.redone)
       }
-      if (rightTrace !== null && /** @type {YType} */ (rightTrace.parent)._item === parentItem) {
+      if (rightTrace !== null && /** @type {YNode} */ (rightTrace.parent)._item === parentItem) {
         right = rightTrace
         break
       }
@@ -508,7 +508,7 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
     } else {
       left = parentType._map.get(item.parentSub) || null
     }
-    if (left !== null && /** @type {YType} */ (left.parent)._item !== parentItem) {
+    if (left !== null && /** @type {YNode} */ (left.parent)._item !== parentItem) {
       left = parentType._map.get(item.parentSub) || null
     }
   }
@@ -540,6 +540,6 @@ export const redoItem = (transaction, item, redoitems, itemsToDelete, ignoreRemo
 export const keepItem = (item, keep) => {
   while (item !== null && item.keep !== keep) {
     item.keep = keep
-    item = /** @type {YType} */ (item.parent)._item
+    item = /** @type {YNode} */ (item.parent)._item
   }
 }

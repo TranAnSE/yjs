@@ -205,7 +205,7 @@ export const nextID = transaction => {
  * did not change, it was just added and we should not fire events for `type`.
  *
  * @param {Transaction} transaction
- * @param {YType} type
+ * @param {YNode} type
  * @param {string|null} parentSub
  */
 export const addChangedTypeToTransaction = (transaction, type, parentSub) => {
@@ -227,8 +227,8 @@ export const tryToMergeWithLefts = (structs, pos) => {
   for (; i > 0; right = left, left = structs[--i - 1]) {
     if (left.deleted === right.deleted && left.constructor === right.constructor) {
       if (left.mergeWith(/** @type {any} */ (right))) {
-        if (right.isItem && /** @type {Item} */ (right).parentSub !== null && /** @type {YType} */ (/** @type {Item} */ (right).parent)._map.get(/** @type {Item} */ (right).parentSub) === right) {
-          /** @type {YType} */ (right.parent)._map.set(right.parentSub, /** @type {Item} */ (left))
+        if (right.isItem && /** @type {Item} */ (right).parentSub !== null && /** @type {YNode} */ (/** @type {Item} */ (right).parent)._map.get(/** @type {Item} */ (right).parentSub) === right) {
+          /** @type {YNode} */ (right.parent)._map.set(right.parentSub, /** @type {Item} */ (left))
         }
         continue
       }

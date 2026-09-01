@@ -107,7 +107,7 @@ export class AbstractRenderer extends ObservableV2 {
   }
 }
 
-export const $renderer = AbstractRenderer.prototype.$type = s.$type('y:r', AbstractRenderer)
+export const $renderer = AbstractRenderer.prototype.$type = s.$type('y:renderer', AbstractRenderer)
 
 /**
  * Rendered length of `item` under `renderer`: the generic rule — alive countable content renders

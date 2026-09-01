@@ -10,8 +10,8 @@ import * as promise from 'lib0/promise'
 
 import { StructStore } from './StructStore.js'
 import { transact, generateNewClientId } from './Transaction.js'
-import { YType } from '../ytype.js'
-import { $ydoc } from './schemas.js'
+import { YNode } from '../ynode.js'
+import { $doc } from './schemas.js'
 
 /**
  * @typedef {Object} DocOpts
@@ -61,7 +61,7 @@ export class Doc extends ObservableV2 {
     this.isSuggestionDoc = isSuggestionDoc
     this.cleanupFormatting = !isSuggestionDoc
     /**
-     * @type {Map<string, YType>}
+     * @type {Map<string, YNode>}
      */
     this.share = new Map()
     this.store = new StructStore()
@@ -192,11 +192,11 @@ export class Doc extends ObservableV2 {
    * @param {string} key
    * @param {string?} name Type-name
    *
-   * @return {YType}
+   * @return {YNode}
    */
   get (key = '', name = null) {
     return map.setIfUndefined(this.share, key, () => {
-      const t = new YType(name)
+      const t = new YNode(name)
       t._integrate(this, null)
       return t
     })
@@ -252,4 +252,4 @@ export class Doc extends ObservableV2 {
   }
 }
 
-Doc.prototype.$type = $ydoc
+Doc.prototype.$type = $doc

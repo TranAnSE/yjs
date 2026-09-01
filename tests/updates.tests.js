@@ -356,7 +356,7 @@ export const testObfuscateUpdates = _tc => {
   ymap.setAttr('key', 'secret1')
   ymap.setAttr('key', 'secret2')
   // test yarray with subtype & subdoc
-  const subtype = new Y.Type('secretnodename')
+  const subtype = new Y.Node('secretnodename')
   const subdoc = new Y.Doc({ guid: 'secret' })
   subtype.setAttr('attr', 'val')
   yarray.insert(0, ['teststring', 42, subtype, subdoc])
@@ -383,7 +383,7 @@ export const testObfuscateUpdates = _tc => {
   t.assert(result.length === 4)
   t.assert(result[0] !== 'teststring')
   t.assert(result[1] !== 42)
-  const osubtype = /** @type {Y.Type} */ (result[2])
+  const osubtype = /** @type {Y.Node} */ (result[2])
   const osubdoc = result[3]
   // test subtype
   t.assert(osubtype.name !== subtype.name)

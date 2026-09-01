@@ -25,7 +25,7 @@ declare type ID = import('./src/utils/ID.js').ID
 declare type Transaction = import('./src/utils/Transaction.js').Transaction
 declare type StructStore = import('./src/utils/StructStore.js').StructStore
 declare type Doc = import('./src/utils/Doc.js').Doc
-declare type YType<DConf extends import('lib0/delta').DeltaConf = any> = import('./src/ytype.js').YType<DConf>
+declare type YNode<DConf extends import('lib0/delta').DeltaConf = any> = import('./src/ynode.js').YNode<DConf>
 declare type YEvent<DConf extends import('lib0/delta').DeltaConf> = import('./src/utils/YEvent.js').YEvent<DConf>
 declare type EventHandler<ARG1=any,ARG2=any> = import('./src/utils/EventHandler.js').EventHandler<ARG1, ARG2>
 

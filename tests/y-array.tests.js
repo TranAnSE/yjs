@@ -63,7 +63,7 @@ export const testSlice = _tc => {
 export const testArrayFrom = _tc => {
   const doc1 = new Y.Doc()
   const db1 = doc1.get('root')
-  const nestedArray1 = Y.Type.from(delta.create().insert([0, 1, 2]))
+  const nestedArray1 = Y.Node.from(delta.create().insert([0, 1, 2]))
   db1.setAttr('array', nestedArray1)
   t.compare(nestedArray1.toArray(), [0, 1, 2])
 }
@@ -318,7 +318,7 @@ export const testInsertAndDeleteEventsForTypes = tc => {
   array0.observe(e => {
     event = e
   })
-  array0.insert(0, [new Y.Type()])
+  array0.insert(0, [new Y.Node()])
   t.assert(event !== null)
   event = null
   array0.delete(0)
@@ -339,7 +339,7 @@ export const testChangeEvent = tc => {
   array0.observe(e => {
     d = e.delta
   })
-  const newArr = new Y.Type()
+  const newArr = new Y.Node()
   array0.insert(0, [newArr, 4, 'dtrn'])
   t.assert(d !== null && d.children.len === 1)
   t.compare(d, delta.create().insert([newArr, 4, 'dtrn']).done())
@@ -364,7 +364,7 @@ export const testInsertAndDeleteEventsForTypes2 = tc => {
   array0.observe(e => {
     events.push(e)
   })
-  array0.insert(0, ['hi', new Y.Type()])
+  array0.insert(0, ['hi', new Y.Node()])
   t.assert(events.length === 1, 'Event is triggered exactly once for insertion of two elements')
   array0.delete(1)
   t.assert(events.length === 2, 'Event is triggered exactly once for deletion')
@@ -379,7 +379,7 @@ export const testNewChildDoesNotEmitEventInTransaction = tc => {
   const { array0, users } = init(tc, { users: 2 })
   let fired = false
   users[0].transact(() => {
-    const newMap = new Y.Type()
+    const newMap = new Y.Node()
     newMap.observe(() => {
       fired = true
     })
@@ -446,7 +446,7 @@ export const testIteratingArrayContainingTypes = _tc => {
   const arr = y.get('arr')
   const numItems = 10
   for (let i = 0; i < numItems; i++) {
-    const map = new Y.Type()
+    const map = new Y.Node()
     map.setAttr('value', i)
     arr.push([map])
   }
@@ -463,7 +463,7 @@ export const testIteratingArrayContainingTypes = _tc => {
 export const testAttributedContent = _tc => {
   const ydoc = new Y.Doc({ gc: false })
   /**
-   * @type {Y.Type<{ children: number }>}
+   * @type {Y.Node<{ children: number }>}
    */
   const yarray = ydoc.get()
   yarray.insert(0, [1, 2])
@@ -509,14 +509,14 @@ const arrayTransactions = [
   function insertTypeArray (user, gen) {
     const yarray = user.get('array')
     const pos = prng.int32(gen, 0, yarray.length)
-    yarray.insert(pos, [new Y.Type()])
+    yarray.insert(pos, [new Y.Node()])
     const array2 = yarray.get(pos)
     array2.insert(0, [1, 2, 3, 4])
   },
   function insertTypeMap (user, gen) {
     const yarray = user.get('array')
     const pos = prng.int32(gen, 0, yarray.length)
-    yarray.insert(pos, [new Y.Type()])
+    yarray.insert(pos, [new Y.Node()])
     const map = yarray.get(pos)
     map.setAttr('someprop', 42)
     map.setAttr('someprop', 43)
@@ -535,7 +535,7 @@ const arrayTransactions = [
       let delLength = prng.int32(gen, 1, math.min(2, length - somePos))
       if (prng.bool(gen)) {
         const type = yarray.get(somePos)
-        if (type instanceof Y.Type && type.length > 0) {
+        if (type instanceof Y.Node && type.length > 0) {
           somePos = prng.int32(gen, 0, type.length - 1)
           delLength = prng.int32(gen, 0, math.min(2, type.length - somePos))
           type.delete(somePos, delLength)

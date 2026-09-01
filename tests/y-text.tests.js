@@ -1438,7 +1438,7 @@ export const testGetDeltaWithEmbeds = tc => {
 export const testTypesAsEmbed = tc => {
   const { text0, text1, testConnector } = init(tc, { users: 2 })
   text0.applyDelta(delta.create()
-    .insert([Y.Type.from(delta.create().setAttr('key', 'val'))])
+    .insert([Y.Node.from(delta.create().setAttr('key', 'val'))])
     .done()
   )
   t.compare(/** @type {any} */ (text0).toDeltaDeep().toJSON().children, [{ type: 'insert', insert: [{ type: 'delta', attrs: { key: { type: 'insert', value: 'val' } } }] }])
@@ -1567,7 +1567,7 @@ export const testFormattingRemoved = tc => {
   text0.insert(0, 'ab', { bold: true })
   text0.delete(0, 2)
   // @ts-ignore
-  t.assert(Y.getTypeChildren(text0).length === 1)
+  t.assert(Y.getNodeChildren(text0).length === 1)
 }
 
 /**
@@ -1578,7 +1578,7 @@ export const testFormattingRemovedInMidText = tc => {
   text0.insert(0, '1234')
   text0.insert(2, 'ab', { bold: true })
   text0.delete(2, 2)
-  t.assert(Y.getTypeChildren(text0).length === 3)
+  t.assert(Y.getNodeChildren(text0).length === 3)
 }
 
 /**

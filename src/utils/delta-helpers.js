@@ -1,7 +1,7 @@
 import * as delta from 'lib0/delta'
 import { createInsertSetFromStructStore, createDeleteSetFromStructStore, diffIdSet, mergeIdSets } from './ids.js'
 import { createDiffRenderer } from './Renderer.js'
-import { computeModifiedFromItems } from '../ytype.js'
+import { computeModifiedFromItems } from '../ynode.js'
 
 /**
  * @param {Doc} v1
@@ -15,7 +15,7 @@ export const diffDocsToDelta = (v1, v2, { renderer = createDiffRenderer(v1, v2) 
   const insertsOnly = diffIdSet(insertDiff, deleteDiff)
   const itemsToRender = mergeIdSets([insertsOnly, deleteDiff])
   /**
-   * @type {Map<YType, Set<string|null>>}
+   * @type {Map<YNode, Set<string|null>>}
    */
   const changedTypes = computeModifiedFromItems(v2.store, itemsToRender)
   const d = delta.create()

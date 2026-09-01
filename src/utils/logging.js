@@ -3,9 +3,9 @@
  *
  * Do not use in productive systems as the output can be immense!
  *
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  */
-export const logType = type => {
+export const logNode = type => {
   const res = []
   let n = type._start
   while (n) {

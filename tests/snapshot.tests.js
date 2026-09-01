@@ -20,7 +20,7 @@ export const testBasic = _tc => {
  */
 export const testBasicXmlAttributes = _tc => {
   const ydoc = new Y.Doc({ gc: false })
-  const yxml = ydoc.get().setAttr('el', new Y.Type('div'))
+  const yxml = ydoc.get().setAttr('el', new Y.Node('div'))
   const snapshot1 = Y.snapshot(ydoc)
   yxml.setAttr('a', '1')
   const snapshot2 = Y.snapshot(ydoc)
@@ -70,7 +70,7 @@ export const testEmptyRestoreSnapshot = _tc => {
  */
 export const testRestoreSnapshotWithSubType = _tc => {
   const doc = new Y.Doc({ gc: false })
-  doc.get('array').insert(0, [new Y.Type()])
+  doc.get('array').insert(0, [new Y.Node()])
   const subMap = doc.get('array').get(0)
   subMap.setAttr('key1', 'value1')
 

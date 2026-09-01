@@ -96,7 +96,7 @@ export const testYdocDiff = () => {
   ydocStart.get('text').insert(0, 'hello')
   ydocStart.get('array').insert(0, [1, 2, 3])
   ydocStart.get('map').setAttr('k', 42)
-  ydocStart.get('map').setAttr('nested', new Y.Type())
+  ydocStart.get('map').setAttr('nested', new Y.Node())
   const ydocUpdated = Y.cloneDoc(ydocStart)
   ydocUpdated.get('text').insert(5, ' world')
   ydocUpdated.get('array').insert(1, ['x'])
@@ -116,7 +116,7 @@ export const testYdocDiff = () => {
 export const testChildListContent = () => {
   const ydocStart = new Y.Doc()
   const ydocUpdated = Y.cloneDoc(ydocStart)
-  const yf = new Y.Type('test')
+  const yf = new Y.Node('test')
   let calledEvent = 0
   yf.applyDelta(delta.create().insert('test content').setAttr('k', 'v').done())
 
@@ -178,13 +178,13 @@ export const testAttributionSession1 = tc => {
 
 export const testAttributionEvent = () => {
   const ydoc = new Y.Doc()
-  const ytype = ydoc.get()
+  const ynode = ydoc.get()
   // <p>hi</p>
-  ytype.applyDelta(delta.create().insert([delta.create('p').insert('hi').done()]).done())
+  ynode.applyDelta(delta.create().insert([delta.create('p').insert('hi').done()]).done())
   const ydocBase = Y.cloneDoc(ydoc)
   const renderer = Y.createDiffRenderer(ydocBase, ydoc)
   let called = false
-  ytype.observeDeep(event => {
+  ynode.observeDeep(event => {
     const change = event.getDelta({ renderer })
     const expectedChange = delta.create().modify(delta.create('p').retain(2, null, { delete: [] }), null, { delete: [] }).done()
     t.compare(
@@ -195,21 +195,21 @@ export const testAttributionEvent = () => {
   })
   // delete <p>
   // we expect that the children get attributions as well
-  ytype.delete(0, 1)
+  ynode.delete(0, 1)
   t.assert(called)
 }
 
 export const testAttributionChange = () => {
   const ydoc = new Y.Doc()
-  const ytype = ydoc.get()
-  ytype.applyDelta(delta.create().insert('hi').done())
+  const ynode = ydoc.get()
+  ynode.applyDelta(delta.create().insert('hi').done())
   const ydocClone = Y.cloneDoc(ydoc)
   const renderer = Y.createDiffRenderer(ydocClone, ydoc)
-  ytype.applyDelta(delta.create().retain(2).insert('!').done())
+  ynode.applyDelta(delta.create().retain(2).insert('!').done())
   let calledHandler = false
   renderer.on('change', changes => {
     calledHandler = true
-    const changeUpdate = ytype.toDelta({ renderer, deep: true, itemsToRender: changes, retainInserts: true, retainDeletes: true })
+    const changeUpdate = ynode.toDelta({ renderer, deep: true, itemsToRender: changes, retainInserts: true, retainDeletes: true })
     // the '!' lost its `{ insert: [] }` suggestion attribution → the change clears it (tri-state `null`)
     const expectedUpdate = delta.create().retain(2).retain(1, undefined, null)
     t.compare(changeUpdate, expectedUpdate)
@@ -219,7 +219,7 @@ export const testAttributionChange = () => {
 }
 
 /**
- * A YType implements the lib0 `RDT` interface, so two types can be kept in sync with `bind`.
+ * A YNode implements the lib0 `RDT` interface, so two types can be kept in sync with `bind`.
  */
 export const testRdtBinding = () => {
   const docA = new Y.Doc()
@@ -333,7 +333,7 @@ export const testRdtDestroy = () => {
 export const testRdtDeltaBubblesLikeObserveDeep = () => {
   const ydoc = new Y.Doc()
   const yarray = ydoc.get('arr')
-  const child = new Y.Type()
+  const child = new Y.Node()
   yarray.insert(0, [child])
   let containerFired = 0
   let childFired = 0
@@ -370,7 +370,7 @@ export const testRdtDeltaCacheMaintenance = () => {
 
   // nested: editing a child updates the container's cached deep delta via a nested modify apply
   const yarray = ydoc.get('arr')
-  const child = new Y.Type()
+  const child = new Y.Node()
   yarray.insert(0, [child])
   child.insert(0, 'a')
   const before = yarray.delta // materialize under base renderer
@@ -420,30 +420,30 @@ export const testRdtUseRendererEmitsDiff = () => {
 }
 
 /**
- * `YType` conforms to the lib0 `RDT` interface — verified at runtime with `$rdt.check` (replaces the
- * old compile-time `_assertYTypeIsRdt`).
+ * `YNode` conforms to the lib0 `RDT` interface — verified at runtime with `$rdt.check` (replaces the
+ * old compile-time `_assertYNodeIsRdt`).
  */
 export const testRdtConformsToRdtSchema = () => {
   t.assert($rdt.check(new Y.Doc().get()))
-  t.assert($rdt.check(new Y.Type()))
+  t.assert($rdt.check(new Y.Node()))
   t.assert(!$rdt.check({}))
   t.assert(!$rdt.check(null))
 }
 
 /**
- * Collect a type and all of its (non-deleted) nested `YType` descendants.
+ * Collect a type and all of its (non-deleted) nested `YNode` descendants.
  *
- * @param {Y.Type<any>} root
- * @return {Array<Y.Type<any>>}
+ * @param {Y.Node<any>} root
+ * @return {Array<Y.Node<any>>}
  */
 const collectTypes = root => {
   /**
-   * @type {Array<Y.Type<any>>}
+   * @type {Array<Y.Node<any>>}
    */
   const out = [root]
   for (let i = 0; i < out.length; i++) {
-    out[i].forEach(c => { if (c instanceof Y.Type) out.push(c) })
-    out[i].forEachAttr(v => { if (v instanceof Y.Type) out.push(v) })
+    out[i].forEach(c => { if (c instanceof Y.Node) out.push(c) })
+    out[i].forEachAttr(v => { if (v instanceof Y.Node) out.push(v) })
   }
   return out
 }
@@ -452,16 +452,16 @@ const collectTypes = root => {
  * Apply one random mutation to a random type in the tree rooted at `root`.
  *
  * @param {prng.PRNG} gen
- * @param {Y.Type<any>} root
+ * @param {Y.Node<any>} root
  */
-const applyRandomYTypeOp = (gen, root) => {
+const applyRandomYNodeOp = (gen, root) => {
   const target = prng.oneOf(gen, collectTypes(root))
   switch (prng.int32(gen, 0, 4)) {
     case 0: // insert text
       target.insert(prng.int32(gen, 0, target.length), prng.word(gen))
       break
     case 1: // insert a nested type
-      target.insert(prng.int32(gen, 0, target.length), [new Y.Type()])
+      target.insert(prng.int32(gen, 0, target.length), [new Y.Node()])
       break
     case 2: // delete a range
       if (target.length > 0) {
@@ -495,7 +495,7 @@ export const testRdtDeltaFuzz = tc => {
   const ydoc = new Y.Doc()
   const root = ydoc.get('root')
   for (let i = 0; i < 300; i++) {
-    applyRandomYTypeOp(tc.prng, root)
+    applyRandomYNodeOp(tc.prng, root)
     collectTypes(root).forEach(type =>
       t.assert(type.delta.equals(type.toDelta({ deep: true })), `iter ${i}`))
   }
@@ -520,7 +520,7 @@ export const testRdtDeltaSuggestionConvergence = tc => {
   d0.get('root').useRenderer(Y.createDiffRenderer(Y.cloneDoc(d0), d0))
   d1.get('root').useRenderer(Y.createDiffRenderer(Y.cloneDoc(d1), d1))
   for (let i = 0; i < 300; i++) {
-    applyRandomYTypeOp(tc.prng, prng.oneOf(tc.prng, users).get('root')) // includes format add/remove
+    applyRandomYNodeOp(tc.prng, prng.oneOf(tc.prng, users).get('root')) // includes format add/remove
     testConnector.flushAllMessages()
     const a = d0.get('root').delta
     const b = d1.get('root').delta
@@ -532,7 +532,7 @@ export const testRdtDeltaSuggestionConvergence = tc => {
 /**
  * Regression (deterministic, seed 1): removing a format under a diffing renderer must keep the
  * incrementally-maintained `.delta` equal to a fresh `toDelta({ deep: true })`. The bug was in the
- * `ContentFormat` change-mode block of `toDelta` (src/ytype.js): un-formatting cleared the format
+ * `ContentFormat` change-mode block of `toDelta` (src/ynode.js): un-formatting cleared the format
  * *value* but emitted only a context-skip for the format-*attribution*, so the maintained cache kept
  * a stale `{attribution:{format:{bold:[]}}}` on the un-formatted range and drifted (at iter 35). The
  * fix emits an explicit `attribution:{format:{<key>:null}}` clear on the retained range (only in a
@@ -552,7 +552,7 @@ export const testRdtFormatRemovalDrift = () => {
   d0.get('root').useRenderer(Y.createDiffRenderer(Y.cloneDoc(d0), d0))
   d1.get('root').useRenderer(Y.createDiffRenderer(Y.cloneDoc(d1), d1))
   for (let i = 0; i < 40; i++) {
-    applyRandomYTypeOp(gen, prng.oneOf(gen, docs).get('root'))
+    applyRandomYNodeOp(gen, prng.oneOf(gen, docs).get('root'))
     sync()
     // read `.delta` every step so it is maintained incrementally (a single read at the end would
     // recompute fresh and hide the drift). The maintained delta MUST equal a fresh deep render.
@@ -598,7 +598,7 @@ export const testRdtFormatRebold = () => {
 }
 
 /**
- * Regression (was a known bug — minimal, deterministic, no prng): inserting an embed (nested `Y.Type`)
+ * Regression (was a known bug — minimal, deterministic, no prng): inserting an embed (nested `Y.Node`)
  * into a bold run used to leave a spurious `attribution:{format:{bold:null}}` null-leaf on the embed in
  * the maintained `delta`, where a fresh deep render has none. Now fixed; this pins it.
  *
@@ -626,7 +626,7 @@ export const testRdtFormatEmbedInBold = () => {
   // first access starts maintaining the incremental cache (baseline == current, so no suggestions yet)
   t.assert(root.delta.equals(delta.create().insert('ab').done()))
   root.format(0, 2, { bold: true }) // bold "ab"
-  root.insert(1, [new Y.Type()]) // insert an embed inside the bold run: "a<T>b"
+  root.insert(1, [new Y.Node()]) // insert an embed inside the bold run: "a<T>b"
   const cached = root.delta
   const fresh = root.toDelta({ deep: true })
   if (!cached.equals(fresh)) {
@@ -681,7 +681,7 @@ export const testRdtDeltaSanity = () => {
   t.assert(root.delta.equals(delta.create().insert('hello').setAttr('k', 'v').done()))
   t.assert(root.delta.equals(root.toDelta({ deep: true })))
   // nested child + ongoing edits keep delta == fresh deep render
-  const child = new Y.Type()
+  const child = new Y.Node()
   root.insert(5, [child])
   child.insert(0, 'world')
   t.assert(root.delta.equals(root.toDelta({ deep: true })))
@@ -733,17 +733,17 @@ export const testRdtFormatAcrossSuggestionDeletedDrift = () => {
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
   )
-  const ytype = suggestionDoc.get('prosemirror')
-  ytype.useRenderer(renderer)
-  t.assert(ytype.delta != null) // materialize the maintained cache
+  const ynode = suggestionDoc.get('prosemirror')
+  ynode.useRenderer(renderer)
+  t.assert(ynode.delta != null) // materialize the maintained cache
   // suggestion-delete "llo " (stays a suggestion; still rendered, attributed)
   renderer.suggestionMode = true
-  ytype.applyDelta(delta.create().modify(delta.create().retain(2).delete(4)).done())
+  ynode.applyDelta(delta.create().modify(delta.create().retain(2).delete(4)).done())
   // as an accepting user, format across the still-rendered deleted range
   renderer.suggestionMode = false
-  ytype.applyDelta(delta.create().modify(delta.create().retain(1).retain(6, { code: {} })).done())
-  const cached = ytype.delta
-  const fresh = ytype.toDelta({ deep: true })
+  ynode.applyDelta(delta.create().modify(delta.create().retain(1).retain(6, { code: {} })).done())
+  const cached = ynode.delta
+  const fresh = ynode.toDelta({ deep: true })
   if (!cached.equals(fresh)) {
     console.error('cached:', JSON.stringify(cached.toJSON()))
     console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -771,9 +771,9 @@ const createSuggestionPair = (baseClientID, sdocClientID, useRootRenderer = true
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'hello world')]).done()
   )
-  const ytype = sdoc.get('prosemirror')
-  if (useRootRenderer) ytype.useRenderer(renderer)
-  return { doc, sdoc, renderer, ytype }
+  const ynode = sdoc.get('prosemirror')
+  if (useRootRenderer) ynode.useRenderer(renderer)
+  return { doc, sdoc, renderer, ynode }
 }
 
 /**
@@ -787,16 +787,16 @@ const createSuggestionPair = (baseClientID, sdocClientID, useRootRenderer = true
  */
 export const testRdtDeltaThroughDeletedParent = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null) // materialize the maintained cache
+    const { doc, ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null) // materialize the maintained cache
     let fired = 0
     /**
      * @type {any}
      */
     let captured = null
-    ytype.on('delta', d => { fired++; captured = d })
+    ynode.on('delta', d => { fired++; captured = d })
     // suggestion-delete the whole paragraph (stays rendered as an attributed tombstone)
-    ytype.applyDelta(delta.create().delete(1).done())
+    ynode.applyDelta(delta.create().delete(1).done())
     t.assert(fired === 1)
     fired = 0
     // remote base edit inside the tombstone: integrates under the deleted paragraph in the
@@ -804,9 +804,9 @@ export const testRdtDeltaThroughDeletedParent = () => {
     doc.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(2).insert('XY')).done())
     t.assert(fired === 1, 'root delta fires for a change inside a suggestion-deleted paragraph')
     t.assert(captured !== null && !captured.isEmpty())
-    const fresh = ytype.toDelta({ deep: true })
+    const fresh = ynode.toDelta({ deep: true })
     t.assert(JSON.stringify(fresh.toJSON()).includes('XY'), 'fresh render shows the text inside the tombstone')
-    const cached = ytype.delta
+    const cached = ynode.delta
     if (!cached.equals(fresh)) {
       console.error('cached:', JSON.stringify(cached.toJSON()))
       console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -823,21 +823,21 @@ export const testRdtDeltaThroughDeletedParent = () => {
  */
 export const testRdtDeltaFreshTypeThroughDeletedParent = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null) // materialize the maintained cache
+    const { doc, ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null) // materialize the maintained cache
     let fired = 0
-    ytype.on('delta', () => { fired++ })
+    ynode.on('delta', () => { fired++ })
     // suggestion-delete the whole paragraph (stays rendered as an attributed tombstone)
-    ytype.applyDelta(delta.create().delete(1).done())
+    ynode.applyDelta(delta.create().delete(1).done())
     fired = 0
     // remote base edit: insert a fresh nested paragraph inside the tombstone
     const freshParagraph = /** @type {any} */ (delta.create('paragraph', {}, 'fresh'))
     const inner = /** @type {any} */ (delta.create().retain(2).insert([freshParagraph]))
     doc.get('prosemirror').applyDelta(delta.create().modify(inner).done())
     t.assert(fired === 1, 'root delta fires for a fresh nested type inside a suggestion-deleted paragraph')
-    const fresh = ytype.toDelta({ deep: true })
+    const fresh = ynode.toDelta({ deep: true })
     t.assert(JSON.stringify(fresh.toJSON()).includes('fresh'), 'fresh render shows the nested type inside the tombstone')
-    const cached = ytype.delta
+    const cached = ynode.delta
     if (!cached.equals(fresh)) {
       console.error('cached:', JSON.stringify(cached.toJSON()))
       console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -853,17 +853,17 @@ export const testRdtDeltaFreshTypeThroughDeletedParent = () => {
  */
 export const testRdtDeltaSuggestedInsertThenDeleteInvisible = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { sdoc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null) // materialize the maintained cache
+    const { sdoc, ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null) // materialize the maintained cache
     // insert and delete the same content in ONE transaction on the suggestion doc
     sdoc.transact(() => {
-      const par = /** @type {Y.Type} */ (ytype.get(0))
+      const par = /** @type {Y.Node} */ (ynode.get(0))
       par.applyDelta(delta.create().retain(2).insert('zz').done())
       par.applyDelta(delta.create().retain(2).delete(2).done())
     })
-    const fresh = ytype.toDelta({ deep: true })
+    const fresh = ynode.toDelta({ deep: true })
     t.assert(!JSON.stringify(fresh.toJSON()).includes('zz'), 'insert-then-deleted suggestion is invisible')
-    const cached = ytype.delta
+    const cached = ynode.delta
     if (!cached.equals(fresh)) {
       console.error('cached:', JSON.stringify(cached.toJSON()))
       console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -887,26 +887,26 @@ export const testRdtDeltaFreshRangeAfterItemMerge = () => {
   sdoc.clientID = 2
   const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
   doc.get('t').applyDelta(delta.create().insert('XY').done())
-  const ytype = sdoc.get('t')
-  ytype.useRenderer(renderer)
-  t.assert(ytype.delta != null) // materialize the maintained cache
+  const ynode = sdoc.get('t')
+  ynode.useRenderer(renderer)
+  t.assert(ynode.delta != null) // materialize the maintained cache
   let reacted = false
-  ytype.on('delta', change => {
+  ynode.on('delta', change => {
     if (reacted || !JSON.stringify(change.toJSON()).includes('"a"')) return
     reacted = true
     // nested transaction, cleaned up after the outer one: insert 'b' right after the suggested
     // 'a' (adjacent clock, same client), then delete both — the outer cleanup merges the two
     // deleted items into one before this transaction's events render
     sdoc.transact(() => {
-      ytype.applyDelta(delta.create().retain(1).insert('b').done())
-      ytype.applyDelta(delta.create().delete(2).done())
+      ynode.applyDelta(delta.create().retain(1).insert('b').done())
+      ynode.applyDelta(delta.create().delete(2).done())
     })
   })
   // outer transaction: suggested insert 'a' at position 0
-  ytype.applyDelta(delta.create().insert('a').done())
+  ynode.applyDelta(delta.create().insert('a').done())
   t.assert(reacted)
-  const cached = ytype.delta
-  const fresh = ytype.toDelta({ deep: true })
+  const cached = ynode.delta
+  const fresh = ynode.toDelta({ deep: true })
   if (!cached.equals(fresh)) {
     console.error('cached:', JSON.stringify(cached.toJSON()))
     console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -919,15 +919,15 @@ export const testRdtDeltaFreshRangeAfterItemMerge = () => {
  * maintained cache stays consistent, and `before.apply(d).apply(fix)` round-trips back to the
  * actual (unchanged) rendered state — the fix is the inverse of the unapplied change.
  *
- * @param {any} ytype the type whose maintained `.delta` cache to check (must be materialized)
- * @param {any} before deep render of `ytype` captured before the apply
+ * @param {any} ynode the type whose maintained `.delta` cache to check (must be materialized)
+ * @param {any} before deep render of `ynode` captured before the apply
  * @param {any} d the change that was (not) applied
  * @param {any} fix the fix `applyDelta` returned
  */
-const assertRevertedApply = (ytype, before, d, fix) => {
-  const fresh = ytype.toDelta({ deep: true })
+const assertRevertedApply = (ynode, before, d, fix) => {
+  const fresh = ynode.toDelta({ deep: true })
   t.assert(delta.diff(before, fresh).isEmpty(), 'nothing was applied to the doc')
-  t.assert(ytype.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
+  t.assert(ynode.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
   const roundTrip = delta.cloneDeep(before)
   roundTrip.apply(delta.cloneDeep(d), { final: true, move: true })
   if (fix !== null) {
@@ -943,19 +943,19 @@ const assertRevertedApply = (ytype, before, d, fix) => {
  */
 export const testRdtApplyDeltaModifyIntoTombstoneReturnsInverse = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null) // materialize the maintained cache
-    ytype.applyDelta(delta.create().delete(1).done())
-    const before = ytype.toDelta({ deep: true })
+    const { ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null) // materialize the maintained cache
+    ynode.applyDelta(delta.create().delete(1).done())
+    const before = ynode.toDelta({ deep: true })
     let fired = 0
-    ytype.on('delta', () => { fired++ })
+    ynode.on('delta', () => { fired++ })
     const d = delta.create().modify(delta.create().retain(2).insert('XY')).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null, 'the reverted operation is returned')
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().modify(delta.create().retain(2).delete(2)).done().toJSON())
     t.assert(fired === 0, 'a fully reverted apply emits no delta event')
-    t.assert(!JSON.stringify(ytype.toDelta({ deep: true }).toJSON()).includes('XY'), 'the insert was not applied')
-    assertRevertedApply(ytype, before, d, fix)
+    t.assert(!JSON.stringify(ynode.toDelta({ deep: true }).toJSON()).includes('XY'), 'the insert was not applied')
+    assertRevertedApply(ynode, before, d, fix)
   }
 }
 
@@ -966,17 +966,17 @@ export const testRdtApplyDeltaModifyIntoTombstoneReturnsInverse = () => {
  */
 export const testRdtApplyDeltaDeleteInsideTombstoneInverse = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null)
-    ytype.applyDelta(delta.create().delete(1).done())
-    const before = ytype.toDelta({ deep: true })
+    const { ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null)
+    ynode.applyDelta(delta.create().delete(1).done())
+    const before = ynode.toDelta({ deep: true })
     const d = delta.create().modify(delta.create().retain(2).delete(4)).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null)
     const fixJson = JSON.stringify(/** @type {any} */ (fix).toJSON())
     t.assert(fixJson.includes('llo '), 'the fix re-inserts the deleted range')
     t.assert(fixJson.includes('"delete"'), 'the re-insert restores the stored delete attribution')
-    assertRevertedApply(ytype, before, d, fix)
+    assertRevertedApply(ynode, before, d, fix)
   }
 }
 
@@ -986,15 +986,15 @@ export const testRdtApplyDeltaDeleteInsideTombstoneInverse = () => {
  */
 export const testRdtApplyDeltaFormatInsideTombstoneInverse = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null)
-    ytype.applyDelta(delta.create().delete(1).done())
-    const before = ytype.toDelta({ deep: true })
+    const { ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null)
+    ynode.applyDelta(delta.create().delete(1).done())
+    const before = ynode.toDelta({ deep: true })
     const d = delta.create().modify(delta.create().retain(1).retain(4, { bold: {} })).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null)
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().modify(delta.create().retain(1).retain(4, { bold: null })).done().toJSON())
-    assertRevertedApply(ytype, before, d, fix)
+    assertRevertedApply(ynode, before, d, fix)
   }
 }
 
@@ -1015,17 +1015,17 @@ export const testRdtApplyDeltaNodeFormatOnTombstoneInverse = () => {
     )
     // base-doc node format over both paragraphs: an alive `align` marker sits before the first one
     doc.get('prosemirror').applyDelta(delta.create().retain(2, { align: 'x' }).done())
-    const ytype = sdoc.get('prosemirror')
-    ytype.useRenderer(renderer)
-    t.assert(ytype.delta != null)
+    const ynode = sdoc.get('prosemirror')
+    ynode.useRenderer(renderer)
+    t.assert(ynode.delta != null)
     // suggestion-delete the second paragraph
-    ytype.applyDelta(delta.create().retain(1).delete(1).done())
-    const before = ytype.toDelta({ deep: true })
+    ynode.applyDelta(delta.create().retain(1).delete(1).done())
+    const before = ynode.toDelta({ deep: true })
     const d = delta.create().retain(1).modify(delta.create(), { align: 'y' }).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null)
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().retain(1).modify(delta.create(), { align: 'x' }).done().toJSON())
-    assertRevertedApply(ytype, before, d, fix)
+    assertRevertedApply(ynode, before, d, fix)
   }
 }
 
@@ -1046,32 +1046,32 @@ export const testRdtApplyDeltaMixedFixCoordinates = () => {
         delta.create('paragraph', {}, 'aa'), delta.create('paragraph', {}, 'hello world'), delta.create('paragraph', {}, 'cc')
       ]).done()
     )
-    const ytype = sdoc.get('prosemirror')
-    ytype.useRenderer(renderer)
-    t.assert(ytype.delta != null)
+    const ynode = sdoc.get('prosemirror')
+    ynode.useRenderer(renderer)
+    t.assert(ynode.delta != null)
     // suggestion-delete the middle paragraph
-    ytype.applyDelta(delta.create().retain(1).delete(1).done())
+    ynode.applyDelta(delta.create().retain(1).delete(1).done())
     let fired = 0
-    ytype.on('delta', () => { fired++ })
+    ynode.on('delta', () => { fired++ })
     const innerXY = /** @type {any} */ (delta.create().retain(2).insert('XY'))
     const innerZZ = /** @type {any} */ (delta.create().retain(2).insert('ZZ'))
     const pNew = /** @type {any} */ (delta.create('paragraph', {}, 'nn'))
     const d = /** @type {any} */ (delta.create()).insert([pNew]).retain(1).modify(innerXY).modify(innerZZ).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fired === 1, 'the applied part of the change emits exactly one delta event')
     t.assert(fix !== null)
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().retain(2).modify(delta.create().retain(2).delete(2)).done().toJSON())
-    const fresh = JSON.stringify(ytype.toDelta({ deep: true }).toJSON())
+    const fresh = JSON.stringify(ynode.toDelta({ deep: true }).toJSON())
     t.assert(fresh.includes('nn') && fresh.includes('ZZ'), 'ops on live content were applied')
     t.assert(!fresh.includes('XY'), 'the tombstone-targeting modify was not applied')
-    t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'maintained .delta must equal a fresh deep render')
+    t.assert(ynode.delta.equals(ynode.toDelta({ deep: true })), 'maintained .delta must equal a fresh deep render')
   }
 }
 
 /**
  * `modifyAttr` addressing a suggestion-deleted (still rendered) map value: the renderer-aware
  * lookup finds the tombstone, nothing is applied, and the fix wraps the inverse in a
- * `modifyAttr` — previously this hit `unexpectedCase` (`typeMapGet` is blind to deleted items).
+ * `modifyAttr` — previously this hit `unexpectedCase` (`nodeMapGet` is blind to deleted items).
  */
 export const testRdtApplyDeltaModifyAttrOnDeletedMapValue = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
@@ -1080,7 +1080,7 @@ export const testRdtApplyDeltaModifyAttrOnDeletedMapValue = () => {
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
     const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
-    const title = doc.get('m').setAttr('title', new Y.Type())
+    const title = doc.get('m').setAttr('title', new Y.Node())
     title.insert(0, 'hi')
     const m = sdoc.get('m')
     m.useRenderer(renderer)
@@ -1106,7 +1106,7 @@ export const testRdtApplyDeltaInvisibleDeletedSilentNull = () => {
   doc.clientID = 1
   const root = doc.get('prosemirror')
   root.applyDelta(delta.create().insert([delta.create('paragraph', {}, 'hello')]).done())
-  const par = /** @type {Y.Type} */ (root.get(0))
+  const par = /** @type {Y.Node} */ (root.get(0))
   root.applyDelta(delta.create().delete(1).done())
   const res = par.applyDelta(delta.create().retain(2).insert('XY').done())
   t.assert(res === null, 'invisible deleted type: silent drop, no fix')
@@ -1120,19 +1120,19 @@ export const testRdtApplyDeltaInvisibleDeletedSilentNull = () => {
  */
 export const testRdtApplyDeltaDirectGuardOnDeletedType = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { ytype, renderer } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null)
-    const par = /** @type {Y.Type} */ (ytype.get(0))
-    ytype.applyDelta(delta.create().delete(1).done())
-    const rootBefore = ytype.toDelta({ deep: true })
+    const { ynode, renderer } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null)
+    const par = /** @type {Y.Node} */ (ynode.get(0))
+    ynode.applyDelta(delta.create().delete(1).done())
+    const rootBefore = ynode.toDelta({ deep: true })
     const d = /** @type {any} */ (delta.create().retain(2).insert('XY').done())
     // children do not inherit the root's renderer — without one the node is invisible
     t.assert(par.applyDelta(d) === null, 'no renderer: silent drop')
     const fix = par.applyDelta(d, null, { renderer })
     t.assert(fix !== null)
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().retain(2).delete(2).done().toJSON())
-    t.assert(delta.diff(rootBefore, ytype.toDelta({ deep: true })).isEmpty(), 'nothing was applied to the doc')
-    t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'maintained .delta must equal a fresh deep render')
+    t.assert(delta.diff(rootBefore, ynode.toDelta({ deep: true })).isEmpty(), 'nothing was applied to the doc')
+    t.assert(ynode.delta.equals(ynode.toDelta({ deep: true })), 'maintained .delta must equal a fresh deep render')
     // fix round-trip at the node level, against its rendered state
     const parBefore = /** @type {any} */ (par.toDelta({ deep: true, renderer }))
     const roundTrip = /** @type {any} */ (delta.cloneDeep(parBefore))
@@ -1156,22 +1156,22 @@ export const testRdtApplyDeltaNestedTombstoneFixBubbles = () => {
     doc.get('prosemirror').applyDelta(
       delta.create().insert([delta.create('paragraph', {}, [delta.create('nested', {}, 'ww')])]).done()
     )
-    const ytype = sdoc.get('prosemirror')
-    ytype.useRenderer(renderer)
-    t.assert(ytype.delta != null)
+    const ynode = sdoc.get('prosemirror')
+    ynode.useRenderer(renderer)
+    t.assert(ynode.delta != null)
     // suggestion-delete only the nested node inside the (alive) paragraph
-    const par = /** @type {Y.Type} */ (ytype.get(0))
+    const par = /** @type {Y.Node} */ (ynode.get(0))
     par.applyDelta(delta.create().delete(1).done(), null, { renderer })
-    const before = ytype.toDelta({ deep: true })
+    const before = ynode.toDelta({ deep: true })
     const innerX = /** @type {any} */ (delta.create().insert('X'))
     const midModify = /** @type {any} */ (delta.create().modify(innerX))
     const d = delta.create().modify(midModify).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null)
     const innerDel = /** @type {any} */ (delta.create().delete(1))
     const midModifyDel = /** @type {any} */ (delta.create().modify(innerDel))
     t.compare(/** @type {any} */ (fix).toJSON(), delta.create().modify(midModifyDel).done().toJSON())
-    assertRevertedApply(ytype, before, d, fix)
+    assertRevertedApply(ynode, before, d, fix)
   }
 }
 
@@ -1192,14 +1192,14 @@ export const testRdtApplyDeltaPureDeleteOverTombstoneNoFix = () => {
         delta.create('paragraph', {}, 'aa'), delta.create('paragraph', {}, 'hello world'), delta.create('paragraph', {}, 'cc')
       ]).done()
     )
-    const ytype = sdoc.get('prosemirror')
-    ytype.useRenderer(renderer)
-    t.assert(ytype.delta != null)
-    ytype.applyDelta(delta.create().retain(1).delete(1).done())
-    const res = ytype.applyDelta(delta.create().delete(3).done())
+    const ynode = sdoc.get('prosemirror')
+    ynode.useRenderer(renderer)
+    t.assert(ynode.delta != null)
+    ynode.applyDelta(delta.create().retain(1).delete(1).done())
+    const res = ynode.applyDelta(delta.create().delete(3).done())
     t.assert(res === null, 'a plain delete over a tombstone range returns no fix')
-    const fresh = ytype.toDelta({ deep: true })
-    t.assert(ytype.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
+    const fresh = ynode.toDelta({ deep: true })
+    t.assert(ynode.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
   }
 }
 
@@ -1218,23 +1218,23 @@ export const testRdtApplyDeltaDeleteMidStruckChunkKeepsCursorSync = () => {
     const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
     doc.get('t').applyDelta(delta.create().insert('abc').done())
     doc.get('t').applyDelta(delta.create().retain(3).insert([delta.create('nA', {}, 'kk'), delta.create('nB', {}, 'qqq')]).done())
-    const ytype = sdoc.get('t')
-    ytype.useRenderer(renderer)
-    t.assert(ytype.delta != null)
+    const ynode = sdoc.get('t')
+    ynode.useRenderer(renderer)
+    t.assert(ynode.delta != null)
     // strike 'bc' (one 2-unit chunk) and both nodes
-    ytype.applyDelta(delta.create().retain(1).delete(2).done())
-    ytype.applyDelta(delta.create().retain(3).delete(2).done())
-    const before = ytype.toDelta({ deep: true })
+    ynode.applyDelta(delta.create().retain(1).delete(2).done())
+    ynode.applyDelta(delta.create().retain(3).delete(2).done())
+    const before = ynode.toDelta({ deep: true })
     // delete struck 'b' (ends MID-chunk), retain struck 'c', revert-modify tombstone nA
     const inner = /** @type {any} */ (delta.create().delete(2))
     const d = delta.create().retain(1).delete(1).retain(1).modify(inner).done()
-    const fix = ytype.applyDelta(d)
+    const fix = ynode.applyDelta(d)
     t.assert(fix !== null)
     const fixJson = JSON.stringify(/** @type {any} */ (fix).toJSON())
     t.assert(fixJson.includes('kk') && !fixJson.includes('qq'), "the fix restores nA's content, not nB's")
-    const fresh = ytype.toDelta({ deep: true })
+    const fresh = ynode.toDelta({ deep: true })
     t.assert(delta.diff(before, fresh).isEmpty(), 'nothing was applied (struck delete is meta-only, modify reverted)')
-    t.assert(ytype.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
+    t.assert(ynode.delta.equals(fresh), 'maintained .delta must equal a fresh deep render')
   }
 }
 
@@ -1251,7 +1251,7 @@ export const testRdtDeltaThroughDeletedAttrValue = () => {
     const sdoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
     sdoc.clientID = sdocClientID
     const renderer = Y.createDiffRenderer(doc, sdoc, { attributions: Y.createContentMap() })
-    const title = doc.get('m').setAttr('title', new Y.Type())
+    const title = doc.get('m').setAttr('title', new Y.Node())
     title.insert(0, 'hi')
     const m = sdoc.get('m')
     m.useRenderer(renderer)
@@ -1276,15 +1276,15 @@ export const testRdtDeltaThroughDeletedAttrValue = () => {
  */
 export const testRdtDeltaFormatThroughDeletedParent = () => {
   for (const [baseClientID, sdocClientID] of [[1, 2], [2, 1]]) {
-    const { doc, ytype } = createSuggestionPair(baseClientID, sdocClientID)
-    t.assert(ytype.delta != null) // materialize the maintained cache
-    ytype.applyDelta(delta.create().delete(1).done()) // suggestion-delete the paragraph
+    const { doc, ynode } = createSuggestionPair(baseClientID, sdocClientID)
+    t.assert(ynode.delta != null) // materialize the maintained cache
+    ynode.applyDelta(delta.create().delete(1).done()) // suggestion-delete the paragraph
     let fired = 0
-    ytype.on('delta', () => { fired++ })
+    ynode.on('delta', () => { fired++ })
     doc.get('prosemirror').applyDelta(delta.create().modify(delta.create().retain(1).retain(4, { bold: {} })).done())
     t.assert(fired === 1, 'root delta fires for a format inside a suggestion-deleted paragraph')
-    const cached = ytype.delta
-    const fresh = ytype.toDelta({ deep: true })
+    const cached = ynode.delta
+    const fresh = ynode.toDelta({ deep: true })
     if (!cached.equals(fresh)) {
       console.error('cached:', JSON.stringify(cached.toJSON()))
       console.error('fresh :', JSON.stringify(fresh.toJSON()))
@@ -1338,20 +1338,20 @@ export const testRdtNoDeltaThroughDeletedParentPlainDoc = () => {
  * changes it cannot see.
  */
 export const testRdtDeletedTypeWithOwnRendererFires = () => {
-  const { doc, renderer, ytype } = createSuggestionPair(1, 2, false)
-  const parB = /** @type {any} */ (ytype.get(0))
+  const { doc, renderer, ynode } = createSuggestionPair(1, 2, false)
+  const parB = /** @type {any} */ (ynode.get(0))
   parB.useRenderer(renderer)
   t.assert(parB.delta != null) // materialize the maintained cache
-  t.assert(ytype.delta != null) // root cache, maintained under the base renderer
+  t.assert(ynode.delta != null) // root cache, maintained under the base renderer
   let parFired = 0
   let parObserved = 0
   let rootFired = 0
   parB.on('delta', () => { parFired++ })
   parB.observe(() => { parObserved++ })
-  ytype.on('delta', () => { rootFired++ })
+  ynode.on('delta', () => { rootFired++ })
   // delete the paragraph (a visible change on the root; the paragraph itself becomes a tombstone
   // that its own diff renderer still renders)
-  ytype.applyDelta(delta.create().delete(1).done())
+  ynode.applyDelta(delta.create().delete(1).done())
   t.assert(rootFired === 1, 'root fires for its own visible delete')
   t.assert(parB.delta.equals(parB.toDelta({ deep: true })), 'deleted type cache current after the deletion')
   const parFiredAfterDelete = parFired
@@ -1362,7 +1362,7 @@ export const testRdtDeletedTypeWithOwnRendererFires = () => {
   t.assert(parObserved >= 1, 'deleted type with its own renderer fires observe')
   t.assert(rootFired === 1, 'base-renderer root does not emit empty deltas')
   t.assert(parB.delta.equals(parB.toDelta({ deep: true })), 'deleted type cache current after the remote format')
-  t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'root cache stays equal to a fresh render')
+  t.assert(ynode.delta.equals(ynode.toDelta({ deep: true })), 'root cache stays equal to a fresh render')
 }
 
 /**
@@ -1409,14 +1409,14 @@ export const testRdtAcceptingNodeInsertCacheDrift = () => {
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'base para')]).done()
   )
-  const ytype = suggestionDoc.get('prosemirror')
-  ytype.useRenderer(renderer)
-  t.assert(ytype.delta != null) // materialize the maintained cache
-  ytype.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'plain')]).done())
+  const ynode = suggestionDoc.get('prosemirror')
+  ynode.useRenderer(renderer)
+  t.assert(ynode.delta != null) // materialize the maintained cache
+  ynode.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'plain')]).done())
   // the insert is committed content: it reached the base doc
   t.assert(JSON.stringify(doc.get('prosemirror').toDeltaDeep().toJSON()).includes('plain'), 'the insert committed to base')
-  const cached = ytype.delta
-  const fresh = ytype.toDelta({ deep: true })
+  const cached = ynode.delta
+  const fresh = ynode.toDelta({ deep: true })
   t.assert(!JSON.stringify(fresh.toJSON()).includes('"attribution"'), 'fresh render shows committed (unattributed) content')
   if (!cached.equals(fresh)) {
     console.error('cached:', JSON.stringify(cached.toJSON()))
@@ -1431,14 +1431,14 @@ export const testRdtAcceptingNodeInsertCacheDrift = () => {
     const suggestionDoc2 = new Y.Doc({ isSuggestionDoc: true, gc: false })
     const renderer2 = Y.createDiffRenderer(doc2, suggestionDoc2, { attributions: Y.createContentMap() })
     doc2.get('prosemirror').applyDelta(delta.create().insert([delta.create('paragraph', {}, 'base para')]).done())
-    const ytype2 = suggestionDoc2.get('prosemirror')
-    ytype2.useRenderer(renderer2)
-    t.assert(ytype2.delta != null) // materialize the maintained cache
+    const ynode2 = suggestionDoc2.get('prosemirror')
+    ynode2.useRenderer(renderer2)
+    t.assert(ynode2.delta != null) // materialize the maintained cache
     renderer2.suggestionMode = true
-    ytype2.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'sugg')]).done())
-    t.assert(ytype2.delta.equals(ytype2.toDelta({ deep: true })), 'suggested insert itself is consistent')
+    ynode2.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'sugg')]).done())
+    t.assert(ynode2.delta.equals(ynode2.toDelta({ deep: true })), 'suggested insert itself is consistent')
     renderer2.acceptAllChanges()
-    t.assert(ytype2.delta.equals(ytype2.toDelta({ deep: true })), 'maintained .delta must equal a fresh render after accepting the node insert')
+    t.assert(ynode2.delta.equals(ynode2.toDelta({ deep: true })), 'maintained .delta must equal a fresh render after accepting the node insert')
   }
 }
 
@@ -1463,16 +1463,16 @@ export const testRdtAcceptingNodeInsertRenderedAsSuggestion = () => {
   doc.get('prosemirror').applyDelta(
     delta.create().insert([delta.create('paragraph', {}, 'base para')]).done()
   )
-  const ytype = suggestionDoc.get('prosemirror')
-  ytype.useRenderer(renderer)
+  const ynode = suggestionDoc.get('prosemirror')
+  ynode.useRenderer(renderer)
   // composed = pre-write state + every emitted change: what any consumer of the `'delta'`
   // channel (a remote binding, the maintained cache) believes the document looks like
-  const composed = delta.cloneDeep(/** @type {any} */ (ytype.toDelta({ deep: true })))
-  ytype.on('delta', d => {
+  const composed = delta.cloneDeep(/** @type {any} */ (ynode.toDelta({ deep: true })))
+  ynode.on('delta', d => {
     composed.apply(/** @type {any} */ (delta.cloneDeep(/** @type {any} */ (d))), { final: true, move: true })
   })
-  ytype.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'plain')]).done())
-  const fresh = ytype.toDelta({ deep: true })
+  ynode.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'plain')]).done())
+  const fresh = ynode.toDelta({ deep: true })
   t.assert(!JSON.stringify(fresh.toJSON()).includes('"attribution"'), 'ground truth: the insert committed to base, nothing is suggested')
   if (!composed.equals(fresh)) {
     console.error('composed:', JSON.stringify(composed.toJSON()))
@@ -1481,8 +1481,8 @@ export const testRdtAcceptingNodeInsertRenderedAsSuggestion = () => {
   t.assert(!JSON.stringify(composed.toJSON()).includes('"attribution"'), 'the settled event stream must not present the committed insert as a suggestion')
   t.assert(composed.equals(fresh), 'composing the emitted changes converges to a fresh render')
   // deeper nesting must heal at *every* level below the top, not just the first
-  ytype.applyDelta(delta.create().retain(2).insert([delta.create('blockquote', {}, [delta.create('paragraph', {}, 'deep')])]).done())
-  const fresh2 = ytype.toDelta({ deep: true })
+  ynode.applyDelta(delta.create().retain(2).insert([delta.create('blockquote', {}, [delta.create('paragraph', {}, 'deep')])]).done())
+  const fresh2 = ynode.toDelta({ deep: true })
   t.assert(!JSON.stringify(fresh2.toJSON()).includes('"attribution"'), 'ground truth: the multi-level insert committed to base')
   t.assert(!JSON.stringify(composed.toJSON()).includes('"attribution"'), 'no nesting level is left presented as a suggestion')
   t.assert(composed.equals(fresh2), 'the event stream converges for multi-level nesting')
@@ -1501,20 +1501,20 @@ export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
   const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
   const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
   doc.get('prosemirror').applyDelta(delta.create().insert([delta.create('paragraph', {}, 'base para')]).done())
-  const ytype = suggestionDoc.get('prosemirror')
-  ytype.useRenderer(renderer)
-  t.assert(ytype.delta != null) // materialize the maintained cache
+  const ynode = suggestionDoc.get('prosemirror')
+  ynode.useRenderer(renderer)
+  t.assert(ynode.delta != null) // materialize the maintained cache
   renderer.suggestionMode = true
   const client = suggestionDoc.clientID
   // suggestion 1: node insert — the paragraph node takes clock 0, its text 'x' clock 1
-  ytype.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'x')]).done())
+  ynode.applyDelta(delta.create().retain(1).insert([delta.create('paragraph', {}, 'x')]).done())
   // suggestion 2: more text inside the suggested node
-  ytype.applyDelta(delta.create().retain(1).modify(delta.create().retain(1).insert('Q')).done())
-  t.assert(ytype.delta.equals(ytype.toDelta({ deep: true })), 'consistent before the partial accept')
+  ynode.applyDelta(delta.create().retain(1).modify(delta.create().retain(1).insert('Q')).done())
+  t.assert(ynode.delta.equals(ynode.toDelta({ deep: true })), 'consistent before the partial accept')
   // accept ONLY the node's own id (clock 0); every child stays a pending suggestion
   renderer.acceptChanges(Y.createID(client, 0))
-  const cached = ytype.delta
-  const fresh = ytype.toDelta({ deep: true })
+  const cached = ynode.delta
+  const fresh = ynode.toDelta({ deep: true })
   const freshJson = /** @type {any} */ (fresh.toJSON())
   // ground truth: the node committed (as an empty paragraph) …
   t.assert(JSON.stringify(doc.get('prosemirror').toDeltaDeep().toJSON()).split('"paragraph"').length === 3, 'the accepted node reached the base doc')
@@ -1530,7 +1530,7 @@ export const testRdtPartialAcceptKeepsPendingChildSuggestions = () => {
 }
 
 /**
- * Regression pin — fixed by `isRangeEndClear` in the ytype format walk (a rendered unattributed
+ * Regression pin — fixed by `isRangeEndClear` in the ynode format walk (a rendered unattributed
  * marker closing an attributed same-key range must emit the per-key attribution clear).
  * Minimized from y-prosemirror's `.dbg-fuzz.mjs` seed 54321, op #8; 14/25 fuzz seeds hit this
  * class: a *base-doc* format arrives over an overlapping same-key *suggested* format, then a

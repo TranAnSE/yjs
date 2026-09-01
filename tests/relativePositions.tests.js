@@ -2,7 +2,7 @@ import * as Y from '../src/index.js'
 import * as t from 'lib0/testing'
 
 /**
- * @param {Y.Type<{text:true}>} ytext
+ * @param {Y.Node<{text:true}>} ytext
  */
 const checkRelativePositions = ytext => {
   // test if all positions are encoded and restored correctly

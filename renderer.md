@@ -48,10 +48,10 @@ Deleted content is represented in attributed results to maintain authorship info
 
 ## API Reference
 
-### Y.Type
+### Y.Node
 
 In Yjs v14 all shared types (text, array, map, xml) are instances of the unified
-`Y.Type`.
+`Y.Node`.
 
 #### `toDelta([{ renderer }])`
 

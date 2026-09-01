@@ -207,7 +207,7 @@ export const testUndoMap = tc => {
   undoManager.redo()
   t.assert(map0.getAttr('a') === 1)
   // testing sub-types and if it can restore a whole type
-  const subType = new Y.Type()
+  const subType = new Y.Node()
   map0.setAttr('a', subType)
   subType.setAttr('x', 42)
   t.compare(map0.toJSON().attrs, /** @type {any} */ ({ a: { attrs: { x: 42 } } }))
@@ -244,7 +244,7 @@ export const testUndoMap = tc => {
  */
 export const testUndoEmbeddedTypeAttribute = tc => {
   const { testConnector, text0, text1 } = init(tc, { users: 2 })
-  const button = new Y.Type()
+  const button = new Y.Node()
   button.setAttr('type', 'button')
   button.setAttr('test', true)
   button.insert(0, 'Click me')
@@ -289,7 +289,7 @@ export const testUndoArray = tc => {
   t.compare(array0.toArray(), [2, 3, 4, 5, 6])
   array0.delete(0, 5)
   // test nested structure
-  const ymap = new Y.Type()
+  const ymap = new Y.Node()
   array0.insert(0, [ymap])
   t.compare(array0.toJSON().children, [{}])
   undoManager.stopCapturing()
@@ -323,9 +323,9 @@ export const testUndoArray = tc => {
 export const testUndoXml = tc => {
   const { xml0 } = init(tc, { users: 3 })
   const undoManager = new Y.UndoManager(xml0)
-  const child = new Y.Type('p')
+  const child = new Y.Node('p')
   xml0.insert(0, [child])
-  const textchild = Y.Type.from(delta.create().insert('content'))
+  const textchild = Y.Node.from(delta.create().insert('content'))
   child.insert(0, [textchild])
   // format textchild and revert that change
   undoManager.stopCapturing()
@@ -389,8 +389,8 @@ export const testTrackClass = tc => {
 export const testTypeScope = tc => {
   const { array0 } = init(tc, { users: 3 })
   // only track origins that are numbers
-  const text0 = new Y.Type()
-  const text1 = new Y.Type()
+  const text0 = new Y.Node()
+  const text1 = new Y.Node()
   array0.insert(0, [text0, text1])
   const undoManager = new Y.UndoManager(text0)
   const undoManagerBoth = new Y.UndoManager([text0, text1])
@@ -410,7 +410,7 @@ export const testTypeScope = tc => {
 export const testUndoInEmbed = tc => {
   const { text0 } = init(tc, { users: 3 })
   const undoManager = new Y.UndoManager(text0)
-  const nestedText = Y.Type.from(delta.create().insert('initial text'))
+  const nestedText = Y.Node.from(delta.create().insert('initial text'))
   undoManager.stopCapturing()
   text0.insert(0, [nestedText], { bold: true })
   t.assert(nestedText.toString() === 'initial text')
@@ -430,9 +430,9 @@ export const testUndoInEmbed = tc => {
 export const testUndoDeleteFilter = tc => {
   const array0 = init(tc, { users: 3 }).array0
   const undoManager = new Y.UndoManager(array0, { deleteFilter: item => !(item instanceof Y.Item) || (item.content instanceof Y.ContentType && item.content.type._map.size === 0) })
-  const map0 = new Y.Type()
+  const map0 = new Y.Node()
   map0.setAttr('hi', 1)
-  const map1 = new Y.Type()
+  const map1 = new Y.Node()
   array0.insert(0, [map0, map1])
   undoManager.undo()
   t.assert(array0.length === 1)
@@ -452,10 +452,10 @@ export const testUndoUntilChangePerformed = _tc => {
 
   const yArray = doc.get('array')
   const yArray2 = doc2.get('array')
-  const yMap = new Y.Type()
+  const yMap = new Y.Node()
   yMap.setAttr('hello', 'world')
   yArray.push([yMap])
-  const yMap2 = new Y.Type()
+  const yMap2 = new Y.Node()
   yMap2.setAttr('key', 'value')
   yArray.push([yMap2])
 
@@ -480,10 +480,10 @@ export const testUndoNestedUndoIssue = _tc => {
   const design = doc.get()
   const undoManager = new Y.UndoManager(design, { captureTimeout: 0 })
 
-  const text = new Y.Type()
+  const text = new Y.Node()
 
-  const blocks1 = new Y.Type()
-  const blocks1block = new Y.Type()
+  const blocks1 = new Y.Node()
+  const blocks1block = new Y.Node()
 
   doc.transact(() => {
     blocks1block.setAttr('text', 'Type Something')
@@ -492,16 +492,16 @@ export const testUndoNestedUndoIssue = _tc => {
     design.setAttr('text', text)
   })
 
-  const blocks2 = new Y.Type()
-  const blocks2block = new Y.Type()
+  const blocks2 = new Y.Node()
+  const blocks2block = new Y.Node()
   doc.transact(() => {
     blocks2block.setAttr('text', 'Something')
     blocks2.push([blocks2block])
     text.setAttr('blocks', blocks2block)
   })
 
-  const blocks3 = new Y.Type()
-  const blocks3block = new Y.Type()
+  const blocks3 = new Y.Node()
+  const blocks3block = new Y.Node()
   doc.transact(() => {
     blocks3block.setAttr('text', 'Something Else')
     blocks3.push([blocks3block])
@@ -532,7 +532,7 @@ export const testConsecutiveRedoBug = _tc => {
   const yRoot = doc.get()
   const undoMgr = new Y.UndoManager(yRoot)
 
-  let yPoint = new Y.Type()
+  let yPoint = new Y.Node()
   yPoint.setAttr('x', 0)
   yPoint.setAttr('y', 0)
   yRoot.setAttr('a', yPoint)
@@ -589,7 +589,7 @@ export const testUndoXmlBug = _tc => {
 
   // create element
   doc.transact(() => {
-    const e = new Y.Type('test-node')
+    const e = new Y.Node('test-node')
     e.setAttr('a', '100')
     e.setAttr('b', '0')
     fragment.insert(fragment.length, [e])
@@ -629,10 +629,10 @@ export const testUndoBlockBug = _tc => {
 
   const undoManager = new Y.UndoManager(design, { captureTimeout: 0 })
 
-  const text = new Y.Type()
+  const text = new Y.Node()
 
-  const blocks1 = new Y.Type()
-  const blocks1block = new Y.Type()
+  const blocks1 = new Y.Node()
+  const blocks1block = new Y.Node()
   doc.transact(() => {
     blocks1block.setAttr('text', '1')
     blocks1.push([blocks1block])
@@ -641,24 +641,24 @@ export const testUndoBlockBug = _tc => {
     design.setAttr('text', text)
   })
 
-  const blocks2 = new Y.Type()
-  const blocks2block = new Y.Type()
+  const blocks2 = new Y.Node()
+  const blocks2block = new Y.Node()
   doc.transact(() => {
     blocks2block.setAttr('text', '2')
     blocks2.push([blocks2block])
     text.setAttr('blocks', blocks2block)
   })
 
-  const blocks3 = new Y.Type()
-  const blocks3block = new Y.Type()
+  const blocks3 = new Y.Node()
+  const blocks3block = new Y.Node()
   doc.transact(() => {
     blocks3block.setAttr('text', '3')
     blocks3.push([blocks3block])
     text.setAttr('blocks', blocks3block)
   })
 
-  const blocks4 = new Y.Type()
-  const blocks4block = new Y.Type()
+  const blocks4 = new Y.Node()
+  const blocks4block = new Y.Node()
   doc.transact(() => {
     blocks4block.setAttr('text', '4')
     blocks4.push([blocks4block])
@@ -746,7 +746,7 @@ export const testSpecialDeletionCase = _tc => {
   const fragment = doc.get()
   const undoManager = new Y.UndoManager(fragment, { trackedOrigins: new Set([origin]) })
   doc.transact(() => {
-    const e = new Y.Type('test')
+    const e = new Y.Node('test')
     e.setAttr('a', '1')
     e.setAttr('b', '2')
     fragment.insert(0, [e])

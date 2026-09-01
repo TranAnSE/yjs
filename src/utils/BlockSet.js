@@ -8,7 +8,7 @@ import * as number from 'lib0/number'
 
 import { createID, ID } from './ID.js'
 import { Item } from '../structs/Item.js'
-import { readItemContent } from '../ytype.js'
+import { readItemContent } from '../ynode.js'
 import { findIndexCleanStart } from './transaction-helpers.js'
 import { Skip } from '../structs/Skip.js'
 import { createIdSet, IdRange } from './ids.js'

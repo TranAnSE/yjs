@@ -14,7 +14,7 @@ import * as object from 'lib0/object'
 export const testIterators = _tc => {
   const ydoc = new Y.Doc()
   /**
-   * @type {Y.Type<{attrs: { [k:string]: number} }>}
+   * @type {Y.Node<{attrs: { [k:string]: number} }>}
    */
   const ymap = ydoc.get()
   // we are only checking if the type assumptions are correct
@@ -36,7 +36,7 @@ export const testIterators = _tc => {
 export const testNestedMapEvent = () => {
   const ydoc = new Y.Doc()
   const ymap = ydoc.get()
-  const ymapNested = ymap.setAttr('nested', new Y.Type())
+  const ymapNested = ymap.setAttr('nested', new Y.Node())
   let called = 0
   ymap.observeDeep(event => {
     const d = event.deltaDeep
@@ -50,7 +50,7 @@ export const testNestedMapEvent = () => {
 export const testNestedMapEvent2 = () => {
   const ydoc = new Y.Doc()
   const yarr = ydoc.get()
-  const ymapNested = new Y.Type()
+  const ymapNested = new Y.Node()
   yarr.insert(0, [ymapNested])
   let called = 0
   yarr.observeDeep(event => {
@@ -90,15 +90,15 @@ export const testMapEventError = _tc => {
  */
 export const testMapHavingIterableAsConstructorParamTests = tc => {
   const { map0 } = init(tc, { users: 1 })
-  const m1 = Y.Type.from(delta.create().setAttr('number', 1).setAttr('string', 'hello'))
+  const m1 = Y.Node.from(delta.create().setAttr('number', 1).setAttr('string', 'hello'))
   map0.setAttr('m1', m1)
   t.assert(m1.getAttr('number') === 1)
   t.assert(m1.getAttr('string') === 'hello')
-  const m2 = Y.Type.from(delta.create(delta.$deltaAny).setAttrs({ object: { x: 1 }, boolean: true }).done())
+  const m2 = Y.Node.from(delta.create(delta.$deltaAny).setAttrs({ object: { x: 1 }, boolean: true }).done())
   map0.setAttr('m2', m2)
   t.assert(m2.getAttr('object')?.x === 1)
   t.assert(m2.getAttr('boolean') === true)
-  const m3 = new Y.Type()
+  const m3 = new Y.Node()
   m3.applyDelta(m1.toDelta())
   m3.applyDelta(m2.toDelta())
   map0.setAttr('m3', m3)
@@ -119,11 +119,11 @@ export const testBasicMapTests = tc => {
   map0.setAttr('number', 1)
   map0.setAttr('string', 'hello Y')
   map0.setAttr('object', { key: { key2: 'value' } })
-  map0.setAttr('y-map', new Y.Type())
+  map0.setAttr('y-map', new Y.Node())
   map0.setAttr('boolean1', true)
   map0.setAttr('boolean0', false)
   const map = map0.getAttr('y-map')
-  map.setAttr('y-array', new Y.Type())
+  map.setAttr('y-array', new Y.Node())
   const array = map.getAttr('y-array')
   array.insert(0, [0])
   array.insert(0, [-1])
@@ -186,7 +186,7 @@ export const testGetAndSetOfMapProperty = tc => {
  */
 export const testYmapSetsYmap = tc => {
   const { users, map0 } = init(tc, { users: 2 })
-  const map = map0.setAttr('Map', new Y.Type())
+  const map = map0.setAttr('Map', new Y.Node())
   t.assert(map0.getAttr('Map') === map)
   map.setAttr('one', 1)
   t.compare(map.getAttr('one'), 1)
@@ -198,7 +198,7 @@ export const testYmapSetsYmap = tc => {
  */
 export const testYmapSetsYarray = tc => {
   const { users, map0 } = init(tc, { users: 2 })
-  const array = map0.setAttr('Array', new Y.Type())
+  const array = map0.setAttr('Array', new Y.Node())
   t.assert(array === map0.getAttr('Array'))
   array.insert(0, [1, 2, 3])
   // @ts-ignore
@@ -377,7 +377,7 @@ export const testThrowsAddAndUpdateAndDeleteEvents = tc => {
     keysChanged: new Set(['stuff'])
   })
   // update, oldValue is in contents
-  map0.setAttr('stuff', new Y.Type())
+  map0.setAttr('stuff', new Y.Node())
   compareEvent(event, {
     target: map0,
     keysChanged: new Set(['stuff'])
@@ -407,7 +407,7 @@ export const testThrowsDeleteEventsOnClear = tc => {
   })
   // set values
   map0.setAttr('stuff', 4)
-  map0.setAttr('otherstuff', new Y.Type())
+  map0.setAttr('otherstuff', new Y.Node())
   // clear
   map0.clearAttrs()
   compareEvent(event, {
@@ -597,7 +597,7 @@ const mapTransactions = [
   },
   function setType (user, gen) {
     const key = prng.oneOf(gen, ['one', 'two'])
-    const type = new Y.Type()
+    const type = new Y.Node()
     user.get('map').setAttr(key, type)
     if (prng.bool(gen)) {
       type.insert(0, [1, 2, 3, 4])

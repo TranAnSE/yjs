@@ -271,7 +271,7 @@ export class TestConnector {
  * @param {t.TestCase} tc
  * @param {{users?:number}} conf
  * @param {InitTestObjectCallback<T>} [initTestObject]
- * @return {{testObjects:Array<any>,testConnector:TestConnector,users:Array<TestYInstance>,array0:Y.Type<any>,array1:Y.Type<any>,array2:Y.Type<any>,map0:Y.Type<any>,map1:Y.Type<any>,map2:Y.Type<any>,map3:Y.Type<any>,text0:Y.Type,text1:Y.Type,text2:Y.Type,xml0:Y.Type,xml1:Y.Type,xml2:Y.Type}}
+ * @return {{testObjects:Array<any>,testConnector:TestConnector,users:Array<TestYInstance>,array0:Y.Node<any>,array1:Y.Node<any>,array2:Y.Node<any>,map0:Y.Node<any>,map1:Y.Node<any>,map2:Y.Node<any>,map3:Y.Node<any>,text0:Y.Node,text1:Y.Node,text2:Y.Node,xml0:Y.Node,xml1:Y.Node,xml2:Y.Node}}
  */
 export const init = (tc, { users = 5 } = {}, initTestObject) => {
   /**
@@ -481,7 +481,7 @@ export const compare = users => {
     t.compare(userXmlValues[i], userXmlValues[i + 1])
     t.compare(list.toArray(userTextValues[i].children).map(a => (delta.$textOp.check(a) || delta.$insertOp.check(a)) ? a.insert.length : 0).reduce((a, b) => a + b, 0), users[i].get('text').length)
     t.compare(userTextValues[i], userTextValues[i + 1], '', (_constructor, a, b) => {
-      if (a instanceof Y.Type) {
+      if (a instanceof Y.Node) {
         t.compare(a.toJSON(), b.toJSON())
       } else if (a !== b) {
         t.fail('Deltas dont match')

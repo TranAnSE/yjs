@@ -81,13 +81,13 @@ export class Transaction {
      * All types that were directly modified (property added or child
      * inserted/deleted). New types are not included in this Set.
      * Maps from type to parentSubs (`item.parentSub = null` for YArray)
-     * @type {Map<YType,Set<String|null>>}
+     * @type {Map<YNode,Set<String|null>>}
      */
     this.changed = new Map()
     /**
      * Stores the events for the types that observe also child elements.
      * It is mainly used by `observeDeep`.
-     * @type {Map<YType,Array<YEvent<any>>>}
+     * @type {Map<YNode,Array<YEvent<any>>>}
      */
     this.changedParentTypes = new Map()
     /**
@@ -174,7 +174,7 @@ export class Transaction {
  *
  * This function won't be exported anymore as soon as there is confidence that the YText type works as intended.
  *
- * @param {YType} type
+ * @param {YNode} type
  * @return {number} How many formats have been cleaned up.
  */
 export const cleanupYTextFormatting = type => {
@@ -359,7 +359,7 @@ const cleanupTransactions = (transactionCleanups, i) => {
  */
 export const cleanupYTextAfterTransaction = transaction => {
   /**
-   * @type {Set<YType>}
+   * @type {Set<YNode>}
    */
   const needFullCleanup = new Set()
   // check if another formatting item was inserted
@@ -374,10 +374,10 @@ export const cleanupYTextAfterTransaction = transaction => {
   // cleanup in a new transaction
   transact(doc, (t) => {
     iterateStructsByIdSet(transaction, transaction.deleteSet, item => {
-      if (item instanceof GC || !(/** @type {YType} */ (item.parent)._hasFormatting) || needFullCleanup.has(/** @type {YType} */ (item.parent))) {
+      if (item instanceof GC || !(/** @type {YNode} */ (item.parent)._hasFormatting) || needFullCleanup.has(/** @type {YNode} */ (item.parent))) {
         return
       }
-      const parent = /** @type {YType} */ (item.parent)
+      const parent = /** @type {YNode} */ (item.parent)
       if (item.content.constructor === ContentFormat) {
         needFullCleanup.add(parent)
       } else {

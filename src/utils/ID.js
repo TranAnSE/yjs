@@ -70,7 +70,7 @@ export const readID = decoder =>
  * `type` does not store any information about the `keyname`.
  * This function finds the correct `keyname` for `type` and throws otherwise.
  *
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  * @return {string}
  *
  * @private

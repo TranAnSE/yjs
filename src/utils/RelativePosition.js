@@ -96,13 +96,13 @@ export const createRelativePositionFromJSON = json => new RelativePosition(json.
 
 export class AbsolutePosition {
   /**
-   * @param {YType<any>} type
+   * @param {YNode<any>} type
    * @param {number} index
    * @param {number} [assoc]
    */
   constructor (type, index, assoc = 0) {
     /**
-     * @type {YType<any>}
+     * @type {YNode<any>}
      */
     this.type = type
     /**
@@ -114,7 +114,7 @@ export class AbsolutePosition {
 }
 
 /**
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  * @param {number} index
  * @param {number} [assoc]
  *
@@ -123,7 +123,7 @@ export class AbsolutePosition {
 export const createAbsolutePosition = (type, index, assoc = 0) => new AbsolutePosition(type, index, assoc)
 
 /**
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  * @param {ID|null} item
  * @param {number} [assoc]
  *
@@ -143,7 +143,7 @@ export const createRelativePosition = (type, item, assoc) => {
 /**
  * Create a relativePosition based on a absolute position.
  *
- * @param {YType} type The base type (e.g. YText or YArray).
+ * @param {YNode} type The base type (e.g. YText or YArray).
  * @param {number} index The absolute position.
  * @param {number} [assoc]
  * @param {import('../utils/Renderer.js').AbstractRenderer?} renderer
@@ -294,7 +294,7 @@ export const createAbsolutePositionFromRelativePosition = (rpos, doc, followUndo
     if (!(right instanceof Item)) {
       return null
     }
-    type = /** @type {YType<any>} */ (right.parent)
+    type = /** @type {YNode<any>} */ (right.parent)
     if (type._item === null || !type._item.deleted) {
       index = rendererContentLength(renderer, right) === 0 ? 0 : (res.diff + (assoc >= 0 ? 0 : 1)) // adjust position based on left association if necessary
       let n = right.left

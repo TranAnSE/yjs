@@ -120,14 +120,14 @@ export const testDeltaValues = _tc => {
  */
 export const testBasics = _tc => {
   const ydoc = new Y.Doc()
-  const ytype = ydoc.get('my data')
+  const ynode = ydoc.get('my data')
   /**
    * @type {delta.Delta<{attrs: { a: number }, children: { my: string }, text: true }>}
    */
   let observedDelta = delta.create()
-  ytype.observe(event => {
+  ynode.observe(event => {
     observedDelta = event.deltaDeep
-    console.log('ytype changed:', observedDelta.toJSON())
+    console.log('ynode changed:', observedDelta.toJSON())
   })
   // define a change: set attribute: a=42
   const attrChange = delta.create().setAttr('a', 42).done()
@@ -138,11 +138,11 @@ export const testBasics = _tc => {
   mergedChanges.apply(attrChange)
   mergedChanges.apply(childChange).done()
   console.log('merged changes: ', mergedChanges.toJSON())
-  ytype.applyDelta(mergedChanges)
+  ynode.applyDelta(mergedChanges)
   // the observed change should equal the applied change
   t.assert(observedDelta.equals(mergedChanges))
   // read the current state of the yjs types as a delta
-  const currState = ytype.toDeltaDeep()
+  const currState = ynode.toDeltaDeep()
   t.assert(currState.equals(mergedChanges)) // equal to the changes that we applied
 }
 
@@ -160,21 +160,21 @@ export const testBasics = _tc => {
  */
 export const testAttributions = _tc => {
   const ydocV1 = new Y.Doc()
-  const ytypeV1 = ydocV1.get('txt')
-  ytypeV1.applyDelta(delta.create().insert('hello world').done())
+  const ynodeV1 = ydocV1.get('txt')
+  ynodeV1.applyDelta(delta.create().insert('hello world').done())
   // create a new version with updated content
   const ydoc = new Y.Doc()
   Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(ydocV1))
-  const ytype = ydoc.get('txt')
+  const ynode = ydoc.get('txt')
   // delete " world" and insert exclamation mark "!".
-  ytype.applyDelta(delta.create().retain(5).delete(6).insert('!').done())
+  ynode.applyDelta(delta.create().retain(5).delete(6).insert('!').done())
   const renderer = Y.createDiffRenderer(ydocV1, ydoc)
   // get the attributed differences
-  const attributedContent = ytype.toDelta({ renderer })
+  const attributedContent = ynode.toDelta({ renderer })
   console.log('attributed content', attributedContent.toJSON())
   t.assert(attributedContent.equals(delta.create().insert('hello').insert(' world', null, { delete: [] }).insert('!', null, { insert: [] }).done()))
   // for editor bindings, it is also necessary to observe changes and get the attributed changes
-  ytype.observe(event => {
+  ynode.observe(event => {
     const attributedChange = event.getDelta({ renderer })
     console.log('the attributed change', attributedChange.toJSON())
     t.assert(attributedChange.done().equals(delta.create().retain(11).insert('!', null, { insert: [] }).done()))
@@ -191,7 +191,7 @@ export const testAttributions = _tc => {
    * UNattributed: 'world!'
    */
   // Apply a change to the attributed content
-  ytype.applyDelta(delta.create().retain(11).insert('!').done(), null, { renderer })
+  ynode.applyDelta(delta.create().retain(11).insert('!').done(), null, { renderer })
   // // Equivalent to applying a change to the UNattributed content:
-  // ytype.applyDelta(delta.create().retain(5).insert('!'))
+  // ynode.applyDelta(delta.create().retain(5).insert('!'))
 }

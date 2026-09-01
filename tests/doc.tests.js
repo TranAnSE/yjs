@@ -14,7 +14,7 @@ export const testAfterTransactionRecursion = _tc => {
   })
   ydoc.transact(_tr => {
     for (let i = 0; i < 15000; i++) {
-      yxml.push([new Y.Type('a')])
+      yxml.push([new Y.Node('a')])
     }
   }, 'test')
 }
@@ -25,23 +25,23 @@ export const testAfterTransactionRecursion = _tc => {
 export const testFindTypeInOtherDoc = _tc => {
   const ydoc = new Y.Doc()
   const ymap = ydoc.get()
-  const ytext = ymap.setAttr('ytext', new Y.Type())
+  const ytext = ymap.setAttr('ytext', new Y.Node())
   const ydocClone = new Y.Doc()
   Y.applyUpdate(ydocClone, Y.encodeStateAsUpdate(ydoc))
   /**
-   * @param {Y.Type} ytype
+   * @param {Y.Node} ynode
    * @param {Y.Doc} otherYdoc
-   * @return {Y.Type}
+   * @return {Y.Node}
    */
-  const findTypeInOtherYdoc = (ytype, otherYdoc) => {
-    const ydoc = /** @type {Y.Doc} */ (ytype.doc)
-    if (ytype._item === null) {
+  const findTypeInOtherYdoc = (ynode, otherYdoc) => {
+    const ydoc = /** @type {Y.Doc} */ (ynode.doc)
+    if (ynode._item === null) {
       /**
        * If is a root type, we need to find the root key in the original ydoc
        * and use it to get the type in the other ydoc.
        */
       const rootKey = Array.from(ydoc.share.keys()).find(
-        (key) => ydoc.share.get(key) === ytype
+        (key) => ydoc.share.get(key) === ynode
       )
       if (rootKey == null) {
         throw new Error('type does not exist in other ydoc')
@@ -51,15 +51,15 @@ export const testFindTypeInOtherDoc = _tc => {
       /**
        * If it is a sub type, we use the item id to find the history type.
        */
-      const ytypeItem = ytype._item
-      const otherStructs = otherYdoc.store.clients.get(ytypeItem.id.client) ?? []
+      const ynodeItem = ynode._item
+      const otherStructs = otherYdoc.store.clients.get(ynodeItem.id.client) ?? []
       const itemIndex = Y.findIndexSS(
         otherStructs,
-        ytypeItem.id.clock
+        ynodeItem.id.clock
       )
       const otherItem = /** @type {Y.Item} */ (otherStructs[itemIndex])
       const otherContent = /** @type {Y.ContentType} */ (otherItem.content)
-      return /** @type {Y.Type} */ (otherContent.type)
+      return /** @type {Y.Node} */ (otherContent.type)
     }
   }
   t.assert(findTypeInOtherYdoc(ymap, ydocClone) != null)
@@ -107,7 +107,7 @@ export const testToJSON = _tc => {
 
   const map = doc.get('map')
   map.setAttr('k1', 'v1')
-  const map2 = new Y.Type()
+  const map2 = new Y.Node()
   map.setAttr('k2', map2)
   map2.setAttr('m2k1', 'm2v1')
   t.compare(doc.toJSON(), {

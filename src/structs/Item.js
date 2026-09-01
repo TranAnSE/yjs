@@ -53,7 +53,7 @@ export class Item extends AbstractStruct {
    * @param {ID | null} origin
    * @param {Item | null} right
    * @param {ID | null} rightOrigin
-   * @param {YType|ID|string|null} parent Is a type if integrated, is null if it is possible to copy parent from left or right, is ID before integration to search for it, is string if child of top-level-parent
+   * @param {YNode|ID|string|null} parent Is a type if integrated, is null if it is possible to copy parent from left or right, is ID before integration to search for it, is string if child of top-level-parent
    * @param {string | null} parentSub
    * @param {AbstractContent} content
    */
@@ -80,7 +80,7 @@ export class Item extends AbstractStruct {
      */
     this.rightOrigin = rightOrigin
     /**
-     * @type {YType|ID|string|null}
+     * @type {YNode|ID|string|null}
      */
     this.parent = parent
     /**
@@ -189,12 +189,12 @@ export class Item extends AbstractStruct {
         if (left !== null) {
           o = left.right
         } else if (this.parentSub !== null) {
-          o = /** @type {YType} */ (this.parent)._map.get(this.parentSub) || null
+          o = /** @type {YNode} */ (this.parent)._map.get(this.parentSub) || null
           while (o !== null && o.left !== null) {
             o = o.left
           }
         } else {
-          o = /** @type {YType} */ (this.parent)._start
+          o = /** @type {YNode} */ (this.parent)._start
         }
         // TODO: use something like DeleteSet here (a tree implementation would be best)
         // @todo use global set definitions
@@ -243,13 +243,13 @@ export class Item extends AbstractStruct {
       } else {
         let r
         if (this.parentSub !== null) {
-          r = /** @type {YType} */ (this.parent)._map.get(this.parentSub) || null
+          r = /** @type {YNode} */ (this.parent)._map.get(this.parentSub) || null
           while (r !== null && r.left !== null) {
             r = r.left
           }
         } else {
-          r = /** @type {YType} */ (this.parent)._start
-          ;/** @type {YType} */ (this.parent)._start = this
+          r = /** @type {YNode} */ (this.parent)._start
+          ;/** @type {YNode} */ (this.parent)._start = this
         }
         this.right = r
       }
@@ -257,7 +257,7 @@ export class Item extends AbstractStruct {
         this.right.left = this
       } else if (this.parentSub !== null) {
         // set as current parent value if right === null and this is parentSub
-        /** @type {YType} */ (this.parent)._map.set(this.parentSub, this)
+        /** @type {YNode} */ (this.parent)._map.set(this.parentSub, this)
         if (this.left !== null) {
           // this is the current attribute value of parent. delete the previous value
           this.left.delete(transaction)
@@ -265,14 +265,14 @@ export class Item extends AbstractStruct {
       }
       // adjust length of parent
       if (this.parentSub === null && this.countable && !this.deleted) {
-        /** @type {YType} */ (this.parent)._length += this.length
+        /** @type {YNode} */ (this.parent)._length += this.length
       }
       addStructToIdSet(transaction.insertSet, this)
       transaction.doc.store.add(this)
       this.content.integrate(transaction, this)
       // add parent to transaction.changed
-      addChangedTypeToTransaction(transaction, /** @type {YType} */ (this.parent), this.parentSub)
-      if ((/** @type {YType} */ (this.parent)._item !== null && /** @type {YType} */ (this.parent)._item.deleted) || (this.parentSub !== null && this.right !== null)) {
+      addChangedTypeToTransaction(transaction, /** @type {YNode} */ (this.parent), this.parentSub)
+      if ((/** @type {YNode} */ (this.parent)._item !== null && /** @type {YNode} */ (this.parent)._item.deleted) || (this.parentSub !== null && this.right !== null)) {
         // delete if parent is deleted or if this is not the current attribute value of parent
         this.delete(transaction)
       }
@@ -332,7 +332,7 @@ export class Item extends AbstractStruct {
       this.content.constructor === right.content.constructor &&
       this.content.mergeWith(right.content)
     ) {
-      const searchMarker = /** @type {YType} */ (this.parent)._searchMarker
+      const searchMarker = /** @type {YNode} */ (this.parent)._searchMarker
       if (searchMarker) {
         searchMarker.forEach(marker => {
           if (marker.p === right) {
@@ -365,7 +365,7 @@ export class Item extends AbstractStruct {
    */
   delete (transaction) {
     if (!this.deleted) {
-      const parent = /** @type {YType} */ (this.parent)
+      const parent = /** @type {YNode} */ (this.parent)
       // adjust the length of parent
       if (this.countable && this.parentSub === null) {
         parent._length -= this.length
@@ -432,7 +432,7 @@ export class Item extends AbstractStruct {
       transaction._mergeStructs.push(rightItem)
       // update parent._map
       if (rightItem.parentSub !== null && rightItem.right === null) {
-        /** @type {YType} */ (rightItem.parent)._map.set(rightItem.parentSub, rightItem)
+        /** @type {YNode} */ (rightItem.parent)._map.set(rightItem.parentSub, rightItem)
       }
     } else {
       rightItem.left = null
@@ -468,7 +468,7 @@ export class Item extends AbstractStruct {
       encoder.writeRightID(rightOrigin)
     }
     if (origin === null && rightOrigin === null) {
-      const parent = /** @type {YType} */ (this.parent)
+      const parent = /** @type {YNode} */ (this.parent)
       if (parent._item !== undefined) {
         const parentItem = parent._item
         if (parentItem === null) {
@@ -1150,7 +1150,7 @@ export class ContentFormat {
    */
   integrate (_transaction, item) {
     // @todo searchmarker are currently unsupported for rich text documents
-    const p = /** @type {import('../ytype.js').YType<any>} */ (item.parent)
+    const p = /** @type {import('../ynode.js').YNode<any>} */ (item.parent)
     p._searchMarker = null
     p._hasFormatting = true
   }
@@ -1392,11 +1392,11 @@ export const YXmlTextRefID = 6
  */
 export class ContentType {
   /**
-   * @param {import('../ytype.js').YType} type
+   * @param {import('../ynode.js').YNode} type
    */
   constructor (type) {
     /**
-     * @type {import('../ytype.js').YType}
+     * @type {import('../ynode.js').YNode}
      */
     this.type = type
   }

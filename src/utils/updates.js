@@ -27,7 +27,7 @@ import {
 } from '../structs/Item.js'
 import {
   readItemContent
-} from '../ytype.js'
+} from '../ynode.js'
 import { Skip } from '../structs/Skip.js'
 
 /**

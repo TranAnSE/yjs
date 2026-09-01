@@ -7,9 +7,9 @@ export const testCustomTypings = () => {
   const ydoc = new Y.Doc()
   const ymap = ydoc.get()
   /**
-   * @type {Y.Type<{ attrs: { num: number, str: string, [k:string]: number|string } }>}
+   * @type {Y.Node<{ attrs: { num: number, str: string, [k:string]: number|string } }>}
    */
-  const yxml = ymap.setAttr('yxml', new Y.Type('test'))
+  const yxml = ymap.setAttr('yxml', new Y.Node('test'))
   /**
    * @type {number|undefined}
    */
@@ -78,10 +78,10 @@ export const testYtextAttributes = _tc => {
 export const testSiblings = _tc => {
   const ydoc = new Y.Doc()
   const yxml = ydoc.get()
-  const first = new Y.Type()
-  const second = new Y.Type('p')
+  const first = new Y.Node()
+  const second = new Y.Node('p')
   yxml.insert(0, [first, second])
-  t.assert(first.parent === /** @type {Y.Type<any>} */ (yxml))
+  t.assert(first.parent === /** @type {Y.Node<any>} */ (yxml))
   t.assert(yxml.parent === null)
 }
 
@@ -91,9 +91,9 @@ export const testSiblings = _tc => {
 export const testClone = _tc => {
   const ydoc = new Y.Doc()
   const yxml = ydoc.get()
-  const first = new Y.Type('text')
-  const second = new Y.Type('p')
-  const third = new Y.Type('p')
+  const first = new Y.Node('text')
+  const second = new Y.Node('p')
+  const third = new Y.Node('p')
   yxml.push([first, second, third])
   t.compareArrays(yxml.toArray(), [first, second, third])
   const cloneYxml = yxml.clone()
@@ -122,8 +122,8 @@ export const testFormattingBug = _tc => {
 export const testElement = _tc => {
   const ydoc = new Y.Doc()
   const yxmlel = ydoc.get()
-  const text1 = new Y.Type('text1')
-  const text2 = new Y.Type('text2')
+  const text1 = new Y.Node('text1')
+  const text2 = new Y.Node('text2')
   yxmlel.insert(0, [text1, text2])
   t.compareArrays(yxmlel.toArray(), [text1, text2])
 }
@@ -133,10 +133,10 @@ export const testElement = _tc => {
  */
 export const testFragmentAttributedContent = _tc => {
   const ydoc = new Y.Doc({ gc: false })
-  const yfragment = new Y.Type()
-  const elem1 = Y.Type.from(delta.create().insert('hello'))
-  const elem2 = new Y.Type()
-  const elem3 = Y.Type.from(delta.create().insert('world'))
+  const yfragment = new Y.Node()
+  const elem1 = Y.Node.from(delta.create().insert('hello'))
+  const elem2 = new Y.Node()
+  const elem3 = Y.Node.from(delta.create().insert('world'))
   yfragment.insert(0, [elem1, elem2])
   ydoc.get().insert(0, [yfragment])
   let renderer = /** @type {AbstractRenderer?} */ (null)
@@ -200,7 +200,7 @@ export const testElementAttributedContentViaDiffer = _tc => {
   Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(ydocV1))
   const yelement = ydoc.get('p')
   const elem2 = yelement.get(1) // new Y.XmlElement('span')
-  const elem3 = Y.Type.from(delta.create().insert('world'))
+  const elem3 = Y.Node.from(delta.create().insert('world'))
   ydoc.transact(() => {
     yelement.delete(0, 1)
     yelement.insert(1, [elem3])
@@ -287,7 +287,7 @@ export const testRendererSimpleExample = _tc => {
   Y.applyUpdate(ydocFork, Y.encodeStateAsUpdate(ydoc))
   // modify the fork
   // append a span element
-  ydocFork.get().insert(1, [new Y.Type('span')])
+  ydocFork.get().insert(1, [new Y.Node('span')])
   const ytext = ydocFork.get().get(0)
   // make "hello" italic
   ytext.format(0, 5, { italic: true })
@@ -390,10 +390,10 @@ const collectForbiddenOps = (d, forbidden, path = '$', acc = []) => {
 
 /**
  * Reproduces the y-prosemirror issue #247 contract violation at the @y/y
- * level: `ytype.toDeltaDeep({ renderer })` is supposed to surface soft-deleted content
+ * level: `ynode.toDeltaDeep({ renderer })` is supposed to surface soft-deleted content
  * as positive ops (`SetAttrOp` / `InsertOp`) carrying attribution metadata,
  * never as `DeleteAttrOp` / `DeleteOp`. Today, when a parent YXmlElement is
- * itself soft-deleted under attribution, `typeMapGetDelta` (ytype.js:1928)
+ * itself soft-deleted under attribution, `nodeMapGetDelta` (ynode.js:1928)
  * and the children traversal in `toDelta` emit raw delete ops for the
  * cascaded child setAttr / content items - which downstream consumers
  * (lib0/delta `diff`, y-prosemirror's PM mapper) cannot handle.
@@ -409,7 +409,7 @@ export const testToDeltaDeepEmitsNoDeleteOpsForSoftDeletedParent = _tc => {
   // and one nested text child.
   const ydocV1 = new Y.Doc({ gc: false })
   const parentV1 = ydocV1.get('frag')
-  const childV1 = new Y.Type('item')
+  const childV1 = new Y.Node('item')
   childV1.setAttr('id', 'C')
   childV1.insert(0, [delta.create().insert('hello')])
   parentV1.insert(0, [childV1])
@@ -448,7 +448,7 @@ export const testToDeltaDeepEmitsNoDeleteOpsForSoftDeletedParent = _tc => {
  * AM must also surface as a positive `SetAttrOp` carrying the prior value and
  * `{ delete: [] }` attribution, never as a `DeleteAttrOp`. The same contract
  * applies whether the attribute deletion came from a parent-cascade or from
- * a direct `ytype.deleteAttr(key)` call.
+ * a direct `ynode.deleteAttr(key)` call.
  *
  * @param {t.TestCase} _tc
  */

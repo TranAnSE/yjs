@@ -34,10 +34,10 @@ import { createIdSet, iterateStructsByIdSetWithoutSplits } from './utils/ids.js'
 import { getItemCleanStart, cleanupFormattingGap } from './utils/transaction-helpers.js'
 import { transact } from './utils/Transaction.js'
 import { YEvent } from './utils/YEvent.js'
-import { $ydoc } from './utils/schemas.js'
+import { $doc } from './utils/schemas.js'
 
 /**
- * @typedef {Object<string,any>|Array<any>|number|null|string|Uint8Array|BigInt|YType<any>} YValue
+ * @typedef {Object<string,any>|Array<any>|number|null|string|Uint8Array|BigInt|YNode<any>} YValue
  */
 
 /**
@@ -134,7 +134,7 @@ export class ItemTextListPosition {
 
   /**
    * @param {Transaction} transaction
-   * @param {YType} parent
+   * @param {YNode} parent
    * @param {number} length
    * @param {Object<string,any>} formats
    *
@@ -224,7 +224,7 @@ export class ItemTextListPosition {
  * Negate applied formats
  *
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {ItemTextListPosition} currPos
  * @param {Map<string,any>} negatedFormats
  *
@@ -297,7 +297,7 @@ const minimizeFormatChanges = (currPos, formats) => {
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {ItemTextListPosition} currPos
  * @param {Object<string,any>} formats
  * @return {Map<string,any>}
@@ -327,7 +327,7 @@ const insertFormats = (transaction, parent, currPos, formats) => {
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {ItemTextListPosition} currPos
  * @param {import('./structs/Item.js').AbstractContent} content
  * @param {Object<string,any>} formats
@@ -359,7 +359,7 @@ export const insertContent = (transaction, parent, currPos, content, formats) =>
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {ItemTextListPosition} currPos
  * @param {Array<any>|string} insert
  * @param {Object<string,any>} formats
@@ -368,20 +368,20 @@ export const insertContentHelper = (transaction, parent, currPos, insert, format
   if (s.$string.check(insert)) {
     insertContent(transaction, parent, currPos, new ContentString(insert), formats)
   } else {
-    insert = insert.map(ins => delta.$deltaAny.check(ins) ? YType.from(ins) : ins)
+    insert = insert.map(ins => delta.$deltaAny.check(ins) ? YNode.from(ins) : ins)
     for (let i = 0; i < insert.length;) {
       const first = insert[i]
-      if (first instanceof YType) {
+      if (first instanceof YNode) {
         insertContent(transaction, parent, currPos, new ContentType(first), formats)
         i++
-      } else if ($ydoc.check(first)) {
+      } else if ($doc.check(first)) {
         insertContent(transaction, parent, currPos, createContentDocFromDoc(first), formats)
         i++
       } else {
         // insert "any" content
         // compute slice len
         let j = i + 1
-        for (; j < insert.length && !(insert[j] instanceof YType || $ydoc.check(insert[j])); j++) { /* nop */ }
+        for (; j < insert.length && !(insert[j] instanceof YNode || $doc.check(insert[j])); j++) { /* nop */ }
         insertContent(transaction, parent, currPos, new ContentAny((i === 0 && j === insert.length) ? insert : insert.slice(i, j)), formats)
         i = j
       }
@@ -455,7 +455,7 @@ export const deleteText = (transaction, currPos, length) => {
   if (start) {
     cleanupFormattingGap(transaction, start, currPos.right, startFormats, currPos.currentFormats)
   }
-  const parent = /** @type {YType<any>} */ (/** @type {Item} */ (currPos.left || currPos.right).parent)
+  const parent = /** @type {YNode<any>} */ (/** @type {Item} */ (currPos.left || currPos.right).parent)
   if (parent._searchMarker) {
     updateMarkerChanges(parent._searchMarker, currPos.index, -startLength + length)
   }
@@ -523,7 +523,7 @@ const markPosition = (searchMarker, p, index) => {
  *
  * This function always returns a refreshed marker (updated timestamp)
  *
- * @param {YType} yarray
+ * @param {YNode} yarray
  * @param {number} index
  */
 export const findMarker = (yarray, index) => {
@@ -619,10 +619,10 @@ export const updateMarkerChanges = (searchMarker, index, len) => {
 /**
  * Accumulate all (list) children of a type and return them as an Array.
  *
- * @param {YType} t
+ * @param {YNode} t
  * @return {Array<Item>}
  */
-export const getTypeChildren = t => {
+export const getNodeChildren = t => {
   t.doc ?? warnPrematureAccess()
   let s = t._start
   const arr = []
@@ -637,7 +637,7 @@ export const getTypeChildren = t => {
  * Call event listeners with an event. This will also add an event to all
  * parents (for `.observeDeep` handlers).
  *
- * @param {YType} type
+ * @param {YNode} type
  * @param {Transaction} transaction
   * @param {YEvent<any>} event
  */
@@ -653,7 +653,7 @@ export const callTypeObservers = (type, transaction, event) => {
     if (type._item === null) {
       break
     }
-    type = /** @type {YType} */ (type._item.parent)
+    type = /** @type {YNode} */ (type._item.parent)
   }
   // a deleted type's own observers stay silent (deleted content is invisible) — unless a
   // renderer is attached to it, which may still render the type (mirrors the fire-time rule for
@@ -666,19 +666,19 @@ export const callTypeObservers = (type, transaction, event) => {
 /**
  * Abstract Yjs Type class.
  *
- * A `YType` is a {@link https://github.com/dmonad/lib0 lib0} `RDT` ("replicated data type", see
+ * A `YNode` is a {@link https://github.com/dmonad/lib0 lib0} `RDT` ("replicated data type", see
  * `lib0/delta/rdt.js`): it emits a `'delta'` event whenever its state changes (carrying the change
  * and the origin of the transaction that caused it), accepts foreign
- * changes via {@link YType#applyDelta}, exposes its delta {@link YType#$delta schema}, and can be
- * torn down via {@link YType#destroy}. This lets a `YType` be `bind()`-ed to any other RDT (another
- * `YType`, an in-memory delta, a DOM subtree, …). The legacy {@link YType#observe `observe`} /
- * {@link YType#observeDeep `observeDeep`} `YEvent` API continues to work alongside the `'delta'`
+ * changes via {@link YNode#applyDelta}, exposes its delta {@link YNode#$delta schema}, and can be
+ * torn down via {@link YNode#destroy}. This lets a `YNode` be `bind()`-ed to any other RDT (another
+ * `YNode`, an in-memory delta, a DOM subtree, …). The legacy {@link YNode#observe `observe`} /
+ * {@link YNode#observeDeep `observeDeep`} `YEvent` API continues to work alongside the `'delta'`
  * channel.
  *
  * @template {delta.DeltaConf} [DConf=any]
- * @extends {ObservableV2<{ delta: (delta: delta.Delta<DConf>, origin: any) => void, destroy: (type: YType<DConf>) => void }>}
+ * @extends {ObservableV2<{ delta: (delta: delta.Delta<DConf>, origin: any) => void, destroy: (type: YNode<DConf>) => void }>}
  */
-export class YType extends ObservableV2 {
+export class YNode extends ObservableV2 {
   /**
    * @param {delta.DeltaConfGetName<DConf>?} name
    */
@@ -707,7 +707,7 @@ export class YType extends ObservableV2 {
     this._length = 0
     /**
      * Event handlers
-     * @type {EventHandler<YEvent<DeltaToYType<DConf>>,Transaction>}
+     * @type {EventHandler<YEvent<DeltaToYNode<DConf>>,Transaction>}
      */
     this._eH = createEventHandler()
     /**
@@ -720,9 +720,9 @@ export class YType extends ObservableV2 {
      */
     this._searchMarker = null
     /**
-     * Maintained deep-delta cache backing {@link YType#delta}. `null` until `delta` is first
+     * Maintained deep-delta cache backing {@link YNode#delta}. `null` until `delta` is first
      * accessed; thereafter kept current on every event of this type (incrementally, by applying the
-     * deep change) and re-diffed by {@link YType#useRenderer}. Cleared by {@link YType#clearCache}.
+     * deep change) and re-diffed by {@link YNode#useRenderer}. Cleared by {@link YNode#clearCache}.
      * @type {delta.DeltaBuilderAny | null}
      */
     this._delta = null
@@ -739,7 +739,7 @@ export class YType extends ObservableV2 {
     /**
      * The active default renderer. Used by `toDelta`, `applyDelta`, and the events whenever no
      * explicit renderer is passed. `null` = no renderer: content renders as-is via the generic
-     * fast path. Change it via {@link YType#useRenderer}.
+     * fast path. Change it via {@link YNode#useRenderer}.
      * @type {AbstractRenderer?}
      */
     this._renderer = null
@@ -747,7 +747,7 @@ export class YType extends ObservableV2 {
      * Bound listener on the active renderer's `'change'` event — attribution corrections that
      * happen without a Y transaction on this doc (e.g. a suggestion is accepted and the
      * renderer's attribution overlay updates). `null` while no renderer is active.
-     * Managed by {@link YType#useRenderer}; see {@link typeApplyRendererChange}.
+     * Managed by {@link YNode#useRenderer}; see {@link typeApplyRendererChange}.
      * @type {((changes: IdSet, origin: any, local: boolean) => void) | null}
      */
     this._rendererChangeHandler = null
@@ -768,14 +768,14 @@ export class YType extends ObservableV2 {
    *
    * The returned value is the type's **live** maintained cache: it is materialized on first access
    * and then kept current on every event fired on this type (and re-diffed by
-   * {@link YType#useRenderer}), so a reference held across edits keeps updating in place. Clone it
-   * (e.g. `type.delta.clone()`) if you need a stable snapshot, and call {@link YType#clearCache} to
+   * {@link YNode#useRenderer}), so a reference held across edits keeps updating in place. Clone it
+   * (e.g. `type.delta.clone()`) if you need a stable snapshot, and call {@link YNode#clearCache} to
    * drop the cache.
    *
    * Consider the returned delta **done** — it must not be edited from the outside. It is
    * deliberately typed as a `Delta` (not a `DeltaBuilder`) so the mutating builder API is not
    * reachable; editing it anyway would corrupt the cache without changing the CRDT. The proper way
-   * to change this type is {@link YType#applyDelta}.
+   * to change this type is {@link YNode#applyDelta}.
    *
    * @type {delta.Delta<DConf>}
    */
@@ -800,10 +800,10 @@ export class YType extends ObservableV2 {
   }
 
   /**
-   * Discard the cached deep delta backing {@link YType#delta}.
+   * Discard the cached deep delta backing {@link YNode#delta}.
    *
    * After `delta` is first accessed, the cache is updated on every event fired on this type (and
-   * re-diffed by {@link YType#useRenderer}). Call this to drop it — e.g. to reclaim memory, or to
+   * re-diffed by {@link YNode#useRenderer}). Call this to drop it — e.g. to reclaim memory, or to
    * force an exact recomputation after editing while a non-base renderer is active (the incremental
    * updates can drift from a fresh deep render in that case).
    */
@@ -816,7 +816,7 @@ export class YType extends ObservableV2 {
    * `toDelta`, `applyDelta`, and event methods all use `renderer` whenever no explicit renderer is
    * passed (an explicit `{ renderer }` argument still overrides it per call).
    *
-   * If the deep-delta cache ({@link YType#delta}) is being maintained, or a `'delta'` listener is
+   * If the deep-delta cache ({@link YNode#delta}) is being maintained, or a `'delta'` listener is
    * attached, the content is re-rendered with the new renderer and the difference is emitted on the
    * `'delta'` channel only (a renderer switch is not a CRDT change, so no `YEvent` is produced, and
    * the emitted origin is `null` as no transaction is involved).
@@ -860,7 +860,7 @@ export class YType extends ObservableV2 {
   /**
    * Tear down this type as an `RDT`: emit the `'destroy'` event, unregister all `'delta'` /
    * `'destroy'` listeners, and reset the RDT surface (active renderer detached, the
-   * maintained {@link YType#delta} cache dropped). The CRDT content and the
+   * maintained {@link YNode#delta} cache dropped). The CRDT content and the
    * `observe`/`observeDeep` handlers are left untouched — this only releases the RDT/binding
    * observers. Without the reset, a still-materialized cache would keep being maintained through
    * the transaction path but no longer receive the renderer's attribution corrections — reading
@@ -881,10 +881,10 @@ export class YType extends ObservableV2 {
   /**
    * @template {delta.DeltaConf} DC
    * @param {delta.Delta<DC>} d
-   * @return {YType<DC>}
+   * @return {YNode<DC>}
    */
   static from (d) {
-    const yt = new YType(d.name)
+    const yt = new YNode(d.name)
     yt.applyDelta(d)
     return yt
   }
@@ -895,18 +895,18 @@ export class YType extends ObservableV2 {
   }
 
   /**
-   * Returns a fresh delta that can be used to change this YType.
-   * @type {delta.DeltaBuilder<DeltaToYType<DConf>>}
+   * Returns a fresh delta that can be used to change this YNode.
+   * @type {delta.DeltaBuilder<DeltaToYNode<DConf>>}
    */
   get change () {
     return /** @type {any} */ (delta.create())
   }
 
   /**
-   * @return {YType<any>?}
+   * @return {YNode<any>?}
    */
   get parent () {
-    return /** @type {YType<any>?} */ (this._item ? this._item.parent : null)
+    return /** @type {YNode<any>?} */ (this._item ? this._item.parent : null)
   }
 
   /**
@@ -929,12 +929,12 @@ export class YType extends ObservableV2 {
   }
 
   /**
-   * @return {YType<DConf>}
+   * @return {YNode<DConf>}
    */
   _copy () {
-    const ytype = new YType(this.name)
-    ytype._legacyTypeRef = this._legacyTypeRef
-    return ytype
+    const ynode = new YNode(this.name)
+    ynode._legacyTypeRef = this._legacyTypeRef
+    return ynode
   }
 
   /**
@@ -962,7 +962,7 @@ export class YType extends ObservableV2 {
   /**
    * Observe all events that are created on this type.
    *
-   * @template {(target: YEvent<DeltaToYType<DConf>>, tr: Transaction) => void} F
+   * @template {(target: YEvent<DeltaToYNode<DConf>>, tr: Transaction) => void} F
    * @param {F} f Observer function
    * @return {F}
    */
@@ -986,7 +986,7 @@ export class YType extends ObservableV2 {
   /**
    * Unregister an observer function.
    *
-   * @param {(type:YEvent<DeltaToYType<DConf>>,tr:Transaction)=>void} f Observer function
+   * @param {(type:YEvent<DeltaToYNode<DConf>>,tr:Transaction)=>void} f Observer function
    */
   unobserve (f) {
     removeEventHandlerListener(this._eH, f)
@@ -1011,14 +1011,14 @@ export class YType extends ObservableV2 {
    * @template {boolean} [Deep=false]
    *
    * @param {Object} [opts]
-   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YNode#useRenderer}), i.e. `null` (render as-is) unless changed
    * @param {IdSet?} [opts.itemsToRender]
    * @param {boolean} [opts.retainInserts] - if true, retain rendered inserts with attributions
    * @param {boolean} [opts.retainDeletes] - if true, retain rendered+attributed deletes only
    * @param {IdSet?} [opts.insertedItems] - ids inserted by the change being rendered; content that is both in `insertedItems` and deleted renders as a *fresh* insert even under `retainDeletes` (it was never part of the consuming state)
-   * @param {Map<YType,Set<string|null>>|null} [opts.modified] - set of types that should be rendered as modified children
+   * @param {Map<YNode,Set<string|null>>|null} [opts.modified] - set of types that should be rendered as modified children
    * @param {Deep} [opts.deep] - render child types as delta
-   * @return {Deep extends true ? delta.Delta<DConf> : delta.Delta<DeltaConfDeltaToYType<DConf>>} The Delta representation of this type.
+   * @return {Deep extends true ? delta.Delta<DConf> : delta.Delta<DeltaConfDeltaToYNode<DConf>>} The Delta representation of this type.
    *
    * @public
    */
@@ -1033,7 +1033,7 @@ export class YType extends ObservableV2 {
     const d = /** @type {any} */ (delta.create(this.name))
     const optsAll = object.assign({}, opts, { renderer, modified })
     // opts has been re-computed - do not use opts after this point!
-    typeMapGetDelta(d, /** @type {any} */ (this), renderAttrs, renderer, deep, modified, itemsToRender, optsAll, optsAll)
+    nodeMapGetDelta(d, /** @type {any} */ (this), renderAttrs, renderer, deep, modified, itemsToRender, optsAll, optsAll)
     if (renderChildren) {
       /**
        * @type {delta.Formats}
@@ -1553,7 +1553,7 @@ export class YType extends ObservableV2 {
    * attributions.
    *
    * @param {Object} [opts]
-   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YNode#useRenderer}), i.e. `null` (render as-is) unless changed
    * @return {delta.Delta<DConf>}
    */
   toDeltaDeep (opts = {}) {
@@ -1568,7 +1568,7 @@ export class YType extends ObservableV2 {
    * `transaction.origin` and forwarded verbatim on the emitted `'delta'` event, so listeners can
    * recognize — and skip — changes they produced themselves; see the lib0 `RDT` spec). Defaults to `null`.
    * @param {Object} [opts]
-   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YType#useRenderer}), i.e. `null` (render as-is) unless changed
+   * @param {AbstractRenderer?} [opts.renderer] - renders the content (with attributions); defaults to this type's active renderer (see {@link YNode#useRenderer}), i.e. `null` (render as-is) unless changed
    * @return {delta.DeltaBuilder<any>?} The lib0 `RDT` "fix" of this apply — a change measured against the
    * caller's expected state (`old.apply(d)`) that transforms it into the actual state, or `null`
    * when `d` applied cleanly. A fix is produced when `d` (or a nested `modify`/`modifyAttr`)
@@ -1662,9 +1662,9 @@ export class YType extends ObservableV2 {
       }
       for (const op of d.attrs) {
         if (delta.$setAttrOp.check(op)) {
-          typeMapSet(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key), op.value)
+          nodeMapSet(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key), op.value)
         } else if (delta.$deleteAttrOp.check(op)) {
-          typeMapDelete(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key))
+          nodeMapDelete(transaction, /** @type {any} */ (this), /** @type {any} */ (op.key))
         } else {
           // modifyAttr — locate the target renderer-aware: a deleted map value may still be rendered
           const mapItem = this._map.get(/** @type {any} */ (op.key))
@@ -1675,7 +1675,7 @@ export class YType extends ObservableV2 {
                     ? /** @type {ContentType} */ (mapItem.content).type
                     : undefined)
                 : mapItem.content.getContent()[mapItem.length - 1])
-          if (!(sub instanceof YType)) {
+          if (!(sub instanceof YNode)) {
             error.unexpectedCase()
           }
           const subFix = sub.applyDelta(op.value, origin, { renderer })
@@ -1694,7 +1694,7 @@ export class YType extends ObservableV2 {
    *
    * Note that the content is only readable _after_ it has been included somewhere in the Ydoc.
    *
-   * @return {YType<DConf>}
+   * @return {YNode<DConf>}
    */
   clone () {
     const cpy = this._copy()
@@ -1750,7 +1750,7 @@ export class YType extends ObservableV2 {
    * @public
    */
   getAttr (attributeName) {
-    return /** @type {any} */ (typeMapGet(this, attributeName))
+    return /** @type {any} */ (nodeMapGet(this, attributeName))
   }
 
   /**
@@ -1762,7 +1762,7 @@ export class YType extends ObservableV2 {
    * @public
    */
   hasAttr (attributeName) {
-    return /** @type {any} */ (typeMapHas(this, attributeName))
+    return /** @type {any} */ (nodeMapHas(this, attributeName))
   }
 
   /**
@@ -1774,7 +1774,7 @@ export class YType extends ObservableV2 {
    * @public
    */
   getAttrs (snapshot) {
-    return /** @type {any} */ (snapshot ? typeMapGetAllSnapshot(this, snapshot) : typeMapGetAll(this))
+    return /** @type {any} */ (snapshot ? nodeMapGetAllSnapshot(this, snapshot) : nodeMapGetAll(this))
   }
 
   /**
@@ -1908,9 +1908,9 @@ export class YType extends ObservableV2 {
     const attrs = this.getAttrs()
     for (const k in attrs) {
       const attr = attrs[k]
-      attrs[k] = attr instanceof YType ? attr.toJSON() : attr
+      attrs[k] = attr instanceof YNode ? attr.toJSON() : attr
     }
-    const children = this.toArray().map(child => child instanceof YType ? /** @type {any} */ (child.toJSON()) : child)
+    const children = this.toArray().map(child => child instanceof YNode ? /** @type {any} */ (child.toJSON()) : child)
     /**
      * @type {any}
      */
@@ -1937,13 +1937,13 @@ export class YType extends ObservableV2 {
      */
     const attrs = []
     this.forEachAttr((attr, key) => {
-      attrs.push([(key), /** @type {any} */ (attr) instanceof YType ? attr.toString({ forceTag: true }) : JSON.stringify(attr)])
+      attrs.push([(key), /** @type {any} */ (attr) instanceof YNode ? attr.toString({ forceTag: true }) : JSON.stringify(attr)])
     })
     const attrsString = (attrs.length > 0 ? ' ' : '') + attrs.sort((a, b) => a[0].toString() < b[0].toString() ? -1 : 1).map(attr => attr[0] + '=' + attr[1]).join(' ')
     /**
      * @type {string}
      */
-    const children = this.toArray().map(c => s.$string.check(c) ? c : (c instanceof YType ? c.toString({ forceTag: true }) : JSON.stringify(c))).join('')
+    const children = this.toArray().map(c => s.$string.check(c) ? c : (c instanceof YNode ? c.toString({ forceTag: true }) : JSON.stringify(c))).join('')
     if (this.name == null && !forceTag && attrs.length === 0) {
       return children
     }
@@ -1978,7 +1978,7 @@ export class YType extends ObservableV2 {
   /**
    * Executes a provided function on once on every key-value pair.
    *
-   * @param {(val:delta.DeltaConfGetAttrs<DConf>[any],key:Exclude<keyof delta.DeltaConfGetAttrs<DConf>,symbol>,ytype:this)=>any} f
+   * @param {(val:delta.DeltaConfGetAttrs<DConf>[any],key:Exclude<keyof delta.DeltaConfGetAttrs<DConf>,symbol>,ynode:this)=>any} f
    */
   forEachAttr (f) {
     this._map.forEach((item, key) => {
@@ -2054,12 +2054,42 @@ export class YType extends ObservableV2 {
 }
 
 /**
- * @template {import('lib0/delta').ReadableDeltaConf} DConf
- * @param {DConf} _dconf
- * @return {s.Schema<YType<import('lib0/delta').ReadDeltaConf<DConf>>>}
+ * Schema of a {@link YNode} with any delta configuration. This is where the nominal `y:node` tag
+ * lives - {@link $node} builds on it. Mirrors lib0's `$deltaAny` / `$delta` split.
  */
-export const $ytype = _dconf => s.$instanceOf(YType)
-export const $ytypeAny = s.$instanceOf(YType)
+export const $nodeAny = /** @type {s.Schema<YNode<any>>} */ (YNode.prototype.$type = s.$type('y:node', YNode))
+
+/**
+ * Schema of a {@link YNode} with a specific delta configuration.
+ *
+ * **Checked at runtime:** the nominal type, and the node's `name`. `name` is assigned once in the
+ * constructor and never reassigned, so the check is stable for the node's lifetime.
+ *
+ * **Not checked at runtime:** `attrs`, `children`, `text`, `formats`. A node does not carry its
+ * `DConf` - `name` is its only runtime residue, which is why {@link YNode#$delta} returns
+ * `$deltaAny`. Those parts are a type-level assertion, and they could not be checked soundly
+ * anyway: a node is a *concurrently* mutable container, so a check of its content would hold only
+ * for the instant it ran - a remote update can violate it immediately after, with no local code
+ * involved. To validate content, validate the immutable value instead:
+ * `delta.$delta(conf).check(node.toDelta())`.
+ *
+ * This is stricter than lib0's `$Delta.check`, which *skips* the name check when `name == null`.
+ * That is right for a delta (a nameless delta asserts nothing about the name) and wrong for a node
+ * (a nameless node is definitively a fragment). So `$node({ name: 'p' })` rejects `ydoc.get('key')`,
+ * whose `name` is `null` unless a name was passed as the *second* argument.
+ *
+ * Allocates a fresh schema per call - hoist it rather than calling it in a hot loop. For a cheap
+ * nominal gate use {@link $nodeAny} (one identity compare).
+ *
+ * @template {delta.ReadableDeltaConf} DConf
+ * @param {DConf} dconf
+ * @return {s.Schema<YNode<delta.ReadDeltaConf<DConf>>>}
+ */
+export const $node = dconf => {
+  // the same coercion lib0's `$delta` applies to `conf.name`
+  const $name = dconf.name == null ? s.$any : s.$(dconf.name)
+  return s.$custom(o => $nodeAny.check(o) && $name.check(o.name))
+}
 
 /**
  * @param {StructStore} store
@@ -2067,12 +2097,12 @@ export const $ytypeAny = s.$instanceOf(YType)
  */
 export const computeModifiedFromItems = (store, items) => {
   /**
-   * @type {Map<YType,Set<null|string>>}
+   * @type {Map<YNode,Set<null|string>>}
    */
   const modified = new Map()
   iterateStructsByIdSetWithoutSplits(store, items, /** @param {Item | GC | Skip | null} item */ item => {
     while (item instanceof Item) {
-      const parent = /** @type {YType} */ (item.parent)
+      const parent = /** @type {YNode} */ (item.parent)
       const conf = map.setIfUndefined(modified, parent, set.create)
       if (conf.has(item.parentSub)) break // has already been marked as modified
       conf.add(item.parentSub)
@@ -2086,14 +2116,14 @@ export const computeModifiedFromItems = (store, items) => {
  * The active renderer's attribution overlay changed (e.g. a suggestion was accepted or rejected)
  * without a Y transaction on the type's doc, so no `YEvent` fires. Re-render the affected id
  * ranges and keep the RDT surface current, mirroring the per-transaction upkeep in
- * `cleanupTransactions`: patch the maintained {@link YType#delta} cache and emit the change on
- * the `'delta'` channel. Wired to the renderer's `'change'` event by {@link YType#useRenderer}.
+ * `cleanupTransactions`: patch the maintained {@link YNode#delta} cache and emit the change on
+ * the `'delta'` channel. Wired to the renderer's `'change'` event by {@link YNode#useRenderer}.
  *
  * Ranges in `changes` that the doc has not (yet) integrated — e.g. a base-doc edit whose update
  * flows in only after the renderer event — simply render to nothing here; the later transaction
  * covers them through the regular event path.
  *
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  * @param {IdSet} changes
  * @param {any} origin
  *
@@ -2123,19 +2153,19 @@ export const equalFormats = (a, b) => a === b || (typeof a === 'object' && typeo
 /**
  * @template {delta.DeltaConf} DConf
  * @typedef {delta.DeltaConfOverwrite<DConf, {
- *     attrs: { [K in keyof delta.DeltaConfGetAttrs<DConf>]: DeltaToYType<delta.DeltaConfGetAttrs<DConf>[K]> },
- *     children: DeltaToYType<delta.DeltaConfGetChildren<DConf>>
+ *     attrs: { [K in keyof delta.DeltaConfGetAttrs<DConf>]: DeltaToYNode<delta.DeltaConfGetAttrs<DConf>[K]> },
+ *     children: DeltaToYNode<delta.DeltaConfGetChildren<DConf>>
  *   }>
- * } DeltaConfDeltaToYType
+ * } DeltaConfDeltaToYNode
  */
 
 /**
  * @template {any} Data
- * @typedef {Exclude<Data,delta.DeltaAny> | (Extract<Data,delta.DeltaAny> extends delta.Delta<infer DConf> ? (unknown extends DConf ? YType<DConf> : never) : never)} DeltaToYType
+ * @typedef {Exclude<Data,delta.DeltaAny> | (Extract<Data,delta.DeltaAny> extends delta.Delta<infer DConf> ? (unknown extends DConf ? YNode<DConf> : never) : never)} DeltaToYNode
  */
 
 /**
- * @param {YType<any>} type
+ * @param {YNode<any>} type
  * @param {number} start
  * @param {number} end
  * @return {Array<any>}
@@ -2175,7 +2205,7 @@ export const typeListSlice = (type, start, end) => {
 /**
  * @todo remove / inline this
  *
- * @param {YType} type
+ * @param {YNode} type
  * @param {number} index
  * @return {any}
  *
@@ -2204,7 +2234,7 @@ export const typeListGet = (type, index) => {
  * @todo this is a duplicate. use the unified insert function and remove this.
  *
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {Item?} referenceItem
  * @param {Array<YValue>} content
  *
@@ -2252,10 +2282,10 @@ export const typeListInsertGenericsAfter = (transaction, parent, referenceItem, 
               left.integrate(transaction, 0)
               break
             default:
-              if ($ydoc.check(c)) {
+              if ($doc.check(c)) {
                 left = new Item(createID(ownClientId, store.getClock(ownClientId)), left, left && left.lastId, right, right && right.id, parent, null, createContentDocFromDoc(/** @type {Doc} */ (c)))
                 left.integrate(transaction, 0)
-              } else if (c instanceof YType) {
+              } else if (c instanceof YNode) {
                 left = new Item(createID(ownClientId, store.getClock(ownClientId)), left, left && left.lastId, right, right && right.id, parent, null, new ContentType(/** @type {any} */ (c)))
                 left.integrate(transaction, 0)
               } else {
@@ -2272,7 +2302,7 @@ const lengthExceeded = () => error.create('Length exceeded!')
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {number} index
  * @param {Array<Object<string,any>|Array<any>|number|null|string|Uint8Array>} content
  *
@@ -2325,7 +2355,7 @@ export const typeListInsertGenerics = (transaction, parent, index, content) => {
  * the search marker.
  *
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {Array<Object<string,any>|Array<any>|number|null|string|Uint8Array>} content
  *
  * @private
@@ -2345,7 +2375,7 @@ export const typeListPushGenerics = (transaction, parent, content) => {
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {number} index
  * @param {number} length
  *
@@ -2394,13 +2424,13 @@ export const typeListDelete = (transaction, parent, index, length) => {
  * @todo inline this code
  *
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {string} key
  *
  * @private
  * @function
  */
-export const typeMapDelete = (transaction, parent, key) => {
+export const nodeMapDelete = (transaction, parent, key) => {
   const c = parent._map.get(key)
   if (c !== undefined) {
     c.delete(transaction)
@@ -2409,14 +2439,14 @@ export const typeMapDelete = (transaction, parent, key) => {
 
 /**
  * @param {Transaction} transaction
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {string} key
  * @param {YValue} value
  *
  * @private
  * @function
  */
-export const typeMapSet = (transaction, parent, key, value) => {
+export const nodeMapSet = (transaction, parent, key, value) => {
   const left = parent._map.get(key) || null
   const doc = transaction.doc
   const ownClientId = doc.clientID
@@ -2438,9 +2468,9 @@ export const typeMapSet = (transaction, parent, key, value) => {
         content = new ContentBinary(/** @type {Uint8Array} */ (value))
         break
       default:
-        if ($ydoc.check(value)) {
+        if ($doc.check(value)) {
           content = createContentDocFromDoc(/** @type {Doc} */ (value))
-        } else if (value instanceof YType) {
+        } else if (value instanceof YNode) {
           content = new ContentType(/** @type {any} */ (value))
         } else {
           throw new Error('Unexpected content type')
@@ -2451,27 +2481,27 @@ export const typeMapSet = (transaction, parent, key, value) => {
 }
 
 /**
- * @param {YType<any>} parent
+ * @param {YNode<any>} parent
  * @param {string} key
- * @return {Object<string,any>|number|null|Array<any>|string|Uint8Array|YType<any>|undefined}
+ * @return {Object<string,any>|number|null|Array<any>|string|Uint8Array|YNode<any>|undefined}
  *
  * @private
  * @function
  */
-export const typeMapGet = (parent, key) => {
+export const nodeMapGet = (parent, key) => {
   parent.doc ?? warnPrematureAccess()
   const val = parent._map.get(key)
   return val !== undefined && !val.deleted ? val.content.getContent()[val.length - 1] : undefined
 }
 
 /**
- * @param {YType<any>} parent
- * @return {Object<string,Object<string,any>|number|null|Array<any>|string|Uint8Array|YType<any>|undefined>}
+ * @param {YNode<any>} parent
+ * @return {Object<string,Object<string,any>|number|null|Array<any>|string|Uint8Array|YNode<any>|undefined>}
  *
  * @private
  * @function
  */
-export const typeMapGetAll = (parent) => {
+export const nodeMapGetAll = (parent) => {
   /**
    * @type {Object<string,any>}
    */
@@ -2496,11 +2526,11 @@ export const typeMapGetAll = (parent) => {
  *
  * @template {delta.DeltaBuilderAny} TypeDelta
  * @param {TypeDelta} d
- * @param {YType} parent
+ * @param {YNode} parent
  * @param {Set<string|null>?} attrsToRender
  * @param {AbstractRenderer?} renderer
  * @param {boolean} deep
- * @param {Set<YType>|Map<YType,any>|null} [modified] - set of types that should be rendered as modified children
+ * @param {Set<YNode>|Map<YNode,any>|null} [modified] - set of types that should be rendered as modified children
  * @param {IdSet?} [itemsToRender]
  * @param {any} [opts]
  * @param {any} [optsAll]
@@ -2508,7 +2538,7 @@ export const typeMapGetAll = (parent) => {
  * @private
  * @function
  */
-export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modified, itemsToRender, opts, optsAll) => {
+export const nodeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modified, itemsToRender, opts, optsAll) => {
   // @todo support modified ops!
   /**
    * @param {Item} item
@@ -2544,8 +2574,8 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
         // also re-emit when the change happened *inside* the still-rendered value (`modified`
         // contains the value type but the attr's own map item is not part of the change) — the
         // deleted value has no modifyAttr path, and a full-state `setAttr` replace is idempotent
-        if (itemsToRender == null || itemsToRender.hasId(item.lastId) || (c instanceof YType && modified != null && modified.has(c))) {
-          if (deep && c instanceof YType) {
+        if (itemsToRender == null || itemsToRender.hasId(item.lastId) || (c instanceof YNode && modified != null && modified.has(c))) {
+          if (deep && c instanceof YNode) {
             // full-state value render: a positive `setAttr` *replaces* the attr value on the
             // consuming side, so the nested type must render as its full attributed state
             // (change-scoped opts like `itemsToRender` would render bare retains here)
@@ -2560,10 +2590,10 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
         // run with `render === false` for such items, so nothing was emitted before either).
         d.deleteAttr(key, attribution)
       }
-    } else if (deep && c instanceof YType && modified?.has(c)) {
+    } else if (deep && c instanceof YNode && modified?.has(c)) {
       d.modifyAttr(key, c.toDelta(opts))
     } else {
-      if (deep && c instanceof YType) {
+      if (deep && c instanceof YNode) {
         c = /** @type {any} */(c).toDelta(optsAll)
       }
       d.setAttr(key, c, attribution)
@@ -2577,14 +2607,14 @@ export const typeMapGetDelta = (d, parent, attrsToRender, renderer, deep, modifi
 }
 
 /**
- * @param {YType<any>} parent
+ * @param {YNode<any>} parent
  * @param {string} key
  * @return {boolean}
  *
  * @private
  * @function
  */
-export const typeMapHas = (parent, key) => {
+export const nodeMapHas = (parent, key) => {
   parent.doc ?? warnPrematureAccess()
   const val = parent._map.get(key)
   return val !== undefined && !val.deleted
@@ -2602,15 +2632,15 @@ export const isVisible = (item, snapshot) => snapshot === undefined
   : snapshot.sv.has(item.id.client) && (snapshot.sv.get(item.id.client) || 0) > item.id.clock && !snapshot.ds.hasId(item.id)
 
 /**
- * @param {YType<any>} parent
+ * @param {YNode<any>} parent
  * @param {string} key
  * @param {Snapshot} snapshot
- * @return {Object<string,any>|number|null|Array<any>|string|Uint8Array|YType<any>|undefined}
+ * @return {Object<string,any>|number|null|Array<any>|string|Uint8Array|YNode<any>|undefined}
  *
  * @private
  * @function
  */
-export const typeMapGetSnapshot = (parent, key, snapshot) => {
+export const nodeMapGetSnapshot = (parent, key, snapshot) => {
   let v = parent._map.get(key) || null
   while (v !== null && (!snapshot.sv.has(v.id.client) || v.id.clock >= (snapshot.sv.get(v.id.client) || 0))) {
     v = v.left
@@ -2619,14 +2649,14 @@ export const typeMapGetSnapshot = (parent, key, snapshot) => {
 }
 
 /**
- * @param {YType<any>} parent
+ * @param {YNode<any>} parent
  * @param {Snapshot} snapshot
- * @return {Object<string,Object<string,any>|number|null|Array<any>|string|Uint8Array|YType<any>|undefined>}
+ * @return {Object<string,Object<string,any>|number|null|Array<any>|string|Uint8Array|YNode<any>|undefined>}
  *
  * @private
  * @function
  */
-export const typeMapGetAllSnapshot = (parent, snapshot) => {
+export const nodeMapGetAllSnapshot = (parent, snapshot) => {
   /**
    * @type {Object<string,any>}
    */
@@ -2647,7 +2677,7 @@ export const typeMapGetAllSnapshot = (parent, snapshot) => {
 }
 
 /**
- * @param {YType<any> & { _map: Map<string, Item> }} type
+ * @param {YNode<any> & { _map: Map<string, Item> }} type
  * @return {IterableIterator<Array<any>>}
  *
  * @private
@@ -2664,7 +2694,7 @@ export const createMapIterator = type => {
  * @param {UpdateDecoderV1 | UpdateDecoderV2} decoder
  * @return {ContentType}
  */
-export const readContentType = decoder => new ContentType(readYType(decoder))
+export const readContentType = decoder => new ContentType(readYNode(decoder))
 
 /**
  * @private
@@ -2770,14 +2800,14 @@ export const readItemContent = (decoder, info) => contentRefs[info & binary.BITS
 
 /**
  * @param {UpdateDecoderV1 | UpdateDecoderV2} decoder
- * @return {YType}
+ * @return {YNode}
  *
  * @private
  * @function
  */
-export const readYType = decoder => {
+export const readYNode = decoder => {
   const typeRef = decoder.readTypeRef()
-  const ytype = new YType(typeRef === YXmlElementRefID || typeRef === YXmlHookRefID ? decoder.readKey() : null)
-  ytype._legacyTypeRef = typeRef
-  return ytype
+  const ynode = new YNode(typeRef === YXmlElementRefID || typeRef === YXmlHookRefID ? decoder.readKey() : null)
+  ynode._legacyTypeRef = typeRef
+  return ynode
 }

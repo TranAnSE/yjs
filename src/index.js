@@ -3,14 +3,15 @@
 
 // Order matters: follows internals.js ordering to avoid circular dependency issues
 
-export { IdSet, equalIdSets, createDeleteSetFromStructStore, createInsertSetFromStructStore, diffIdSet, createIdSet, mergeIdSets, insertIntoIdSet, iterateStructsByIdSet, gcIdSet, readIdSet, writeIdSet, encodeIdSet, decodeIdSet, IdMap, createIdMap, createContentAttribute, ContentAttribute, diffIdMap, encodeIdMap, createIdMapFromIdSet, createIdSetFromIdMap, insertIntoIdMap, mergeIdMaps, readIdMap, writeIdMap, decodeIdMap, filterIdMap, intersectSets, intersectMaps } from './utils/ids.js'
+export { IdSet, equalIdSets, createDeleteSetFromStructStore, createInsertSetFromStructStore, diffIdSet, createIdSet, mergeIdSets, insertIntoIdSet, iterateStructsByIdSet, gcIdSet, readIdSet, writeIdSet, encodeIdSet, decodeIdSet, IdMap, createIdMap, createContentAttribute, ContentAttribute, diffIdMap, encodeIdMap, createIdMapFromIdSet, createIdSetFromIdMap, insertIntoIdMap, mergeIdMaps, readIdMap, writeIdMap, decodeIdMap, filterIdMap, intersectSets, intersectMaps, $idSet, $idMapAny, $idMap } from './utils/ids.js'
 export { Doc } from './utils/Doc.js'
+export { $doc } from './utils/schemas.js'
 export { UpdateDecoderV1, UpdateDecoderV2 } from './utils/UpdateDecoder.js'
 export { UpdateEncoderV1, UpdateEncoderV2 } from './utils/UpdateEncoder.js'
 export { applyUpdate, applyUpdateV2, readUpdate, readUpdateV2, encodeStateAsUpdate, encodeStateAsUpdateV2, encodeStateVector, decodeStateVector, diffUpdate, diffUpdateV2, mergeUpdates, mergeUpdatesV2, createDocFromUpdate, createDocFromUpdateV2, cloneDoc } from './utils/encoding.js'
 export { ID, createID, compareIDs, findRootTypeKey } from './utils/ID.js'
 export { isParentOf } from './utils/isParentOf.js'
-export { logType } from './utils/logging.js'
+export { logNode } from './utils/logging.js'
 export { createRelativePositionFromTypeIndex, createRelativePositionFromJSON, createAbsolutePositionFromRelativePosition, compareRelativePositions, AbsolutePosition, RelativePosition, relativePositionToJSON, encodeRelativePosition, decodeRelativePosition } from './utils/RelativePosition.js'
 export { Snapshot, createSnapshot, snapshot, emptySnapshot, createDocFromSnapshot, decodeSnapshot, encodeSnapshot, decodeSnapshotV2, encodeSnapshotV2, equalSnapshots, snapshotContainsUpdate } from './utils/Snapshot.js'
 export { findIndexSS, getItemCleanStart, getItemCleanEnd, tryGc } from './utils/transaction-helpers.js'
@@ -20,7 +21,7 @@ export { logUpdate, logUpdateV2, decodeUpdate, decodeUpdateV2, encodeStateVector
 export { YEvent, getPathTo } from './utils/YEvent.js'
 export { AttributionsRenderer, createAttributionsRenderer, AbstractRenderer, createDiffRenderer, DiffRenderer, createSnapshotRenderer, SnapshotRenderer, $renderer } from './utils/Renderer.js'
 export { diffDocsToDelta } from './utils/delta-helpers.js'
-export { YType as Type, getTypeChildren, typeMapGetSnapshot, typeMapGetAllSnapshot, $ytype, $ytypeAny } from './ytype.js'
+export { YNode as Node, getNodeChildren, nodeMapGetSnapshot, nodeMapGetAllSnapshot, $node, $nodeAny } from './ynode.js'
 export { AbstractStruct } from './structs/AbstractStruct.js'
 export { GC } from './structs/GC.js'
 export { Item, ContentBinary, ContentDeleted, ContentDoc, ContentEmbed, ContentFormat, ContentJSON, ContentAny, ContentString, ContentType } from './structs/Item.js'
