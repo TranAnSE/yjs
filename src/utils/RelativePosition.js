@@ -295,7 +295,9 @@ export const createAbsolutePositionFromRelativePosition = (rpos, doc, followUndo
       return null
     }
     type = /** @type {YNode<any>} */ (right.parent)
-    if (type._item === null || !type._item.deleted) {
+    // an index into a deleted type is meaningless - unless a renderer still renders the type
+    // (e.g. a deleted-but-rendered suggestion-mode subtree)
+    if (type._item === null || !type._item.deleted || rendererContentLength(renderer, type._item) > 0) {
       index = rendererContentLength(renderer, right) === 0 ? 0 : (res.diff + (assoc >= 0 ? 0 : 1)) // adjust position based on left association if necessary
       let n = right.left
       while (n !== null) {
