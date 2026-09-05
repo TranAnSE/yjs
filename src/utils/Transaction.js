@@ -262,7 +262,7 @@ const cleanupTransactions = (transactionCleanups, i) => {
             // a base-renderer type doesn't render deleted content, so a change that happened
             // entirely inside a deleted subtree renders to an empty delta — don't emit those no-ops
             if (!change.isEmpty()) {
-              type._delta?.apply(change) // keep the cache current (incl. ancestors and diff-renderer attributions)
+              type._delta?.apply(change) // keep the cache current (incl. ancestors and diff-renderer attributions) — builder API only, see the YNode._delta fingerprint-memo invariant
               if (hasDeltaListeners) type.emit('delta', [change, transaction.origin])
             }
           }

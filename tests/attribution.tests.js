@@ -486,6 +486,37 @@ const applyRandomYNodeOp = (gen, root) => {
 }
 
 /**
+ * Assert the maintained `.delta` cache of `type` is (a) structurally correct — equals a fresh
+ * `toDelta({ deep: true })` — and (b) fingerprint-memo-fresh — its (possibly memoized)
+ * `fingerprint` equals a `delta.cloneDeep` recompute (cloneDeep rebuilds every node memo-free,
+ * so it is a true recompute oracle at every depth; `clone`/`slice` are not — they share frozen
+ * nested deltas by reference).
+ *
+ * Reading `.fingerprint` also (re)memoizes it on the LIVE cache at every depth — exactly what a
+ * y-sync-style consumer does when diffing against `type.delta` — so the NEXT in-place cache patch
+ * hits an already-fingerprinted tree and any missing memo invalidation surfaces on the next call.
+ *
+ * Diagnosis: `equals` fail = cache drift; `equals` pass + fingerprint mismatch = stale memo
+ * (a mutation reached the cache without routing through the lib0 builder API — see the
+ * `YNode._delta` invariant in src/ynode.js).
+ *
+ * @param {Y.Node<any>} type
+ * @param {string} msg
+ */
+const assertDeltaCacheFresh = (type, msg) => {
+  const cached = type.delta
+  const memoFp = cached.fingerprint // reads (and re-populates) the memo on the live cache
+  const fresh = type.toDelta({ deep: true })
+  if (!cached.equals(fresh)) {
+    console.error(`${msg} cached :`, JSON.stringify(cached.toJSON()))
+    console.error(`${msg} toDelta:`, JSON.stringify(fresh.toJSON()))
+  }
+  t.assert(cached.equals(fresh), `${msg}: maintained .delta drifted from toDelta({ deep: true })`)
+  t.assert(memoFp === delta.cloneDeep(/** @type {any} */ (cached)).fingerprint,
+    `${msg}: stale fingerprint memo on the live .delta cache`)
+}
+
+/**
  * Fuzz: after each random mutation, every type's maintained `delta` cache (at every nesting level)
  * must equal a fresh deep render `toDelta({ deep: true })`.
  *
@@ -502,12 +533,33 @@ export const testRdtDeltaFuzz = tc => {
 }
 
 /**
+ * Fuzz pin: fingerprint-memo safety of the maintained `.delta` cache under in-place patching
+ * (the per-transaction `type._delta?.apply(change)` path in `cleanupTransactions`).
+ * Reading `.fingerprint` each iteration memoizes on the live cache of every type (root deep
+ * cache AND each nested type's own cache); the next random transaction then patches
+ * already-fingerprinted trees, and the memo must equal a full `delta.cloneDeep` recompute.
+ * `testRdtDeltaFuzz` above is the memo-free control: if only this test fails, the drift is a
+ * stale fingerprint memo, not a structural one.
+ *
+ * @param {t.TestCase} tc
+ */
+export const testRdtFingerprintMemoFuzzCacheDrift = tc => {
+  const ydoc = new Y.Doc()
+  const root = ydoc.get('root')
+  for (let i = 0; i < 300; i++) {
+    applyRandomYNodeOp(tc.prng, root)
+    collectTypes(root).forEach(type => assertDeltaCacheFresh(type, `iter ${i}`))
+  }
+}
+
+/**
  * Fuzz under a diffing renderer, across two synced replicas. Each replica is a "suggestion doc" that
  * diffs against its own fixed baseline clone (taken after some shared initial content). With the plain
  * diff renderer (no `attrs`), suggestion inserts render `{ insert: [] }` and deletes render
  * `{ delete: [] }` — identical on every replica — so the maintained, diff-attributed `delta` must
  * converge across replicas (and match a fresh deep render). The cache is kept current purely by the
- * `'delta'` event (no recompute).
+ * `'delta'` event (no recompute). Also memo-pressures both replicas' live caches via fingerprint
+ * reads each iteration (see `assertDeltaCacheFresh`) — these consume no prng, so seeds reproduce.
  *
  * @param {t.TestCase} tc
  */
@@ -525,7 +577,9 @@ export const testRdtDeltaSuggestionConvergence = tc => {
     const a = d0.get('root').delta
     const b = d1.get('root').delta
     t.assert(a.equals(b), `converge iter ${i}`) // the suggestion view is replica-independent
-    t.assert(a.equals(d0.get('root').toDelta({ deep: true })), `canonical iter ${i}`) // and matches a fresh render
+    // matches a fresh render, and the fingerprint memos survive the in-place cache patches
+    assertDeltaCacheFresh(d0.get('root'), `iter ${i} (d0)`)
+    assertDeltaCacheFresh(d1.get('root'), `iter ${i} (d1)`)
   }
 }
 
@@ -2169,6 +2223,33 @@ export const testRdtBaseFormatClearInsideSuggestionDeletedParagraphCacheDrift = 
     console.error('fresh :', JSON.stringify(fresh.toJSON()))
   }
   t.assert(cached.equals(fresh), 'maintained .delta must equal a fresh deep render after a base format clear inside a suggestion-deleted paragraph')
+}
+
+/**
+ * Fingerprint-memo pin for the SECOND in-place cache-patch site: the renderer-overlay path
+ * (`typeApplyRendererChange` in src/ynode.js) — patches the maintained `.delta` via `apply` on a
+ * renderer 'change' event, WITHOUT a Y transaction on this doc (the fuzz pins only cover the
+ * per-transaction path). Fingerprints are memoized on the live cache before each step, exactly
+ * like a y-sync consumer; every overlay patch must invalidate them. Text-only ops on purpose
+ * (accept flows around nested node inserts have separately pinned structural quirks — see e.g.
+ * testRdtAcceptAllOfSameValueSuggestedFormatCacheDrift — that would contaminate this memo pin).
+ */
+export const testRdtFingerprintMemoOverlayCacheDrift = () => {
+  const doc = new Y.Doc({ gc: false })
+  const suggestionDoc = new Y.Doc({ isSuggestionDoc: true, gc: false })
+  const renderer = Y.createDiffRenderer(doc, suggestionDoc, { attributions: Y.createContentMap() })
+  doc.get('root').applyDelta(delta.create().insert('base content').done())
+  const ynode = suggestionDoc.get('root')
+  ynode.useRenderer(renderer)
+  t.assert(ynode.delta.fingerprint != null) // materialize the cache AND memoize (the y-sync consumer step)
+  renderer.suggestionMode = true
+  ynode.applyDelta(delta.create().retain(2).delete(3).done()) // suggestion delete
+  assertDeltaCacheFresh(ynode, 'after suggestion delete')
+  ynode.format(0, 2, { bold: true }) // suggested format
+  assertDeltaCacheFresh(ynode, 'after suggested format')
+  // accept fires 'change' -> typeApplyRendererChange -> in-place apply on the memoized cache
+  renderer.acceptAllChanges()
+  assertDeltaCacheFresh(ynode, 'after acceptAllChanges (renderer overlay patch)')
 }
 
 /**

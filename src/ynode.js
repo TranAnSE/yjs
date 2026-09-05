@@ -723,6 +723,14 @@ export class YNode extends ObservableV2 {
      * Maintained deep-delta cache backing {@link YNode#delta}. `null` until `delta` is first
      * accessed; thereafter kept current on every event of this type (incrementally, by applying the
      * deep change) and re-diffed by {@link YNode#useRenderer}. Cleared by {@link YNode#clearCache}.
+     *
+     * INVARIANT (fingerprint-memo safety): consumers (e.g. y-sync) diff against this LIVE object
+     * via {@link YNode#delta}, which memoizes `_fingerprint` on its delta/op nodes at every depth.
+     * Every in-place patch — the per-transaction `apply` in `cleanupTransactions` and the
+     * renderer-overlay `apply` in {@link typeApplyRendererChange} — MUST route through the lib0
+     * delta builder API (`apply`), which invalidates those memos. NEVER write delta/op fields
+     * directly: a direct write leaves stale memos, corrupting every subsequent fingerprint read
+     * and diff. Pinned by the `testRdtFingerprintMemo*CacheDrift` tests.
      * @type {delta.DeltaBuilderAny | null}
      */
     this._delta = null
@@ -2122,6 +2130,9 @@ export const computeModifiedFromItems = (store, items) => {
  * Ranges in `changes` that the doc has not (yet) integrated — e.g. a base-doc edit whose update
  * flows in only after the renderer event — simply render to nothing here; the later transaction
  * covers them through the regular event path.
+ *
+ * The cache patch must stay on the builder `apply` — see the {@link YNode#_delta}
+ * fingerprint-memo invariant.
  *
  * @param {YNode<any>} type
  * @param {IdSet} changes
